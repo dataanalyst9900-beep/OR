@@ -93,6 +93,7 @@ textarea{resize:vertical;min-height:80px;}
 .badge-approved{background:#F0FDF4;color:var(--success);}
 .badge-rejected{background:#FEF2F2;color:var(--danger);}
 .badge-assigned{background:#F5F3FF;color:var(--purple);}
+.badge-accepted{background:#ECFDF5;color:#065F46;border:1px solid #6EE7B7;}
 .badge-completed{background:#F0FDF4;color:var(--success);}
 .badge-open{background:#FFFBEB;color:var(--warn);}
 
@@ -582,10 +583,12 @@ let RESUB_ID=null, APPR_EDIT_ID=null;
 let TECH_DATA={}, SEC_H={};
 let MY_AUDITS=[], HIST_LOAD=false;
 let APPROVER_GRIDS=[], PEND_AUDITS=[], APPR_HISTORY=[], APP_LOAD=false, HIST_APP_LOAD=false, PEND_BADGE=0;
+let ASSIGN_BADGE=0; // count of activities needing assignment
 let SUBMITTING=false, SUBMIT_ST=null;
 
 // Activity state
 let AC_PAGE = 'dashboard';
+let AN_PAGE = 'overview'; // analytics sub-page
 let ACT_TYPE_SEL = '';
 let ACT_TITLE='', ACT_DESC='', ACT_SITE='', ACT_REGION='', ACT_PRIORITY='Medium', ACT_POC='';
 let ACT_COMPLAINT_LAT='', ACT_COMPLAINT_LNG='', ACT_COMPLAINT_POC='', ACT_INSTR_TEAM='';
@@ -898,6 +901,10 @@ async function loadActivities() {
   } catch(e) {
     console.error('loadActivities error:', e);
   }
+  // Compute how many open unassigned + rejected activities need coordinator action
+  ASSIGN_BADGE = ALL_ACTS.filter(a =>
+    (!a.assigned_to && (a.status==='open'||!a.status)) || a.status==='rejected'
+  ).length;
   ACT_LOAD=false; renderPage();
 }
 async function submitActivity() {
@@ -1074,6 +1081,7 @@ function switchModule(m){
   if(lmBtn)lmBtn.classList.remove('active');
   MODULE=m;
   if(m==='activity'){ AC_PAGE='dashboard'; loadActivities(); }
+  if(m==='analytics'){ AN_PAGE='overview'; loadAnalytics(); }
   if(m==='audit') A_PAGE='new';
   render();
 }
@@ -1088,17 +1096,23 @@ function renderSidebar() {
       ${[{id:'new',icon:'➕',label:'New Audit'},{id:'history',icon:'🕐',label:'My Audits'},{id:'approvals',icon:'✅',label:'Approvals',badge:PEND_BADGE}].map(n=>
         `<button class="nav-item ${A_PAGE===n.id?'active':''}" onclick="auditNav('${n.id}')"><span class="ni">${n.icon}</span>${n.label}${n.badge?`<span class="nav-badge">${n.badge}</span>`:''}</button>`
       ).join('')}`;
+  } else if(MODULE==='analytics'){
+    sidebar.innerHTML=`
+      <div class="sidebar-label">Analytics</div>
+      <button class="nav-item active"><span class="ni">📊</span>Dashboard</button>
+      <button class="nav-item" onclick="loadAnalytics()"><span class="ni">🔄</span>Refresh</button>`;
   } else {
     sidebar.innerHTML=`
       <div class="sidebar-label">Activities</div>
       ${[
         {id:'dashboard',    icon:'📊', label:"Today's Dashboard"},
+        {id:'analytics_act',icon:'📈', label:'Analytics'},
         {id:'new_activity', icon:'➕', label:'New Activity'},
         {id:'my_activities',icon:'📋', label:'My Activities'},
         {id:'all_activities',icon:'🌐',label:'All Activities'},
-        ...(AUTH?.isCoordinator?[{id:'assign',icon:'👤',label:'Assign Activities'}]:[])
+        ...(AUTH?.isCoordinator?[{id:'assign',icon:'👤',label:'Assign Activities',badge:ASSIGN_BADGE}]:[])
       ].map(n=>
-        `<button class="nav-item ${AC_PAGE===n.id?'active':''}" onclick="actNav('${n.id}')"><span class="ni">${n.icon}</span>${n.label}</button>`
+        `<button class="nav-item ${AC_PAGE===n.id?'active':''}" onclick="actNav('${n.id}')"><span class="ni">${n.icon}</span>${n.label}${n.badge?`<span class="nav-badge">${n.badge}</span>`:''}</button>`
       ).join('')}`;
   }
 }
@@ -1110,8 +1124,11 @@ function render() {
     if(A_PAGE==='new')        el.innerHTML=renderAuditNew();
     else if(A_PAGE==='history')    el.innerHTML=renderAuditHistory();
     else if(A_PAGE==='approvals')  el.innerHTML=renderAuditApprovals();
+  } else if(MODULE==='analytics'){
+    el.innerHTML=renderAnalytics();
   } else {
     if(AC_PAGE==='dashboard')          el.innerHTML=renderDashboard();
+    else if(AC_PAGE==='analytics_act')  el.innerHTML=renderAnalyticsFull();
     else if(AC_PAGE==='new_activity')   el.innerHTML=renderNewActivity();
     else if(AC_PAGE==='my_activities')  el.innerHTML=renderMyActivities();
     else if(AC_PAGE==='all_activities') el.innerHTML=renderAllActivities();
@@ -1137,18 +1154,42 @@ function renderPage(){render();}
 function auditNav(p){
   A_PAGE=p;if(p==='history')loadAuditHistory();if(p==='approvals'){if(APPROVER_GRIDS.length===0)loadApproverGrids();else loadPending();}render();
 }
-function actNav(p){AC_PAGE=p;loadActivities();render();}
+function actNav(p){AC_PAGE=p;if(p==='analytics_act'){if(!AN_DATA&&!AN_LOAD)loadAnalytics();render();}else{loadActivities();}}
+function analyticsNav(p){AN_PAGE=p;render();}
+
+let AN_DATA = null;
+let AN_LOAD = false;
+
+async function loadAnalytics(){
+  if(AN_LOAD) return;
+  AN_LOAD=true; render();
+  try {
+    // Load all activities for analytics (no limit - use pagination)
+    let all=[], offset=0, pageSize=1000;
+    while(true){
+      const page = await DB.get('/rest/v1/activities?order=created_at.desc&limit='+pageSize+'&offset='+offset);
+      if(!page||!page.length) break;
+      all=all.concat(page);
+      if(page.length<pageSize) break;
+      offset+=pageSize;
+    }
+    AN_DATA = all;
+  } catch(e){ console.error('loadAnalytics error:', e); AN_DATA=[]; }
+  AN_LOAD=false; render();
+}
 
 // helpers
 function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function fmtDate(iso){return iso?iso.slice(0,10):'—';}
 function fmtDT(iso){return iso?iso.slice(0,16).replace('T',' '):'—';}
 function statusBadge(s){
-  const m={approved:'badge-approved ✓ Approved',rejected:'badge-rejected ✕ Rejected',pending_approval:'badge-pending ⏳ Pending',assigned:'badge-assigned 👤 Assigned',completed:'badge-completed ✓ Completed',open:'badge-open 📌 Open',cancelled:'badge-cancelled ✕ Cancelled',onhold:'badge-onhold ⏸ On Hold',reassigned:'badge-reassigned ↺ Reassigned'};
+  const m={approved:'badge-approved ✓ Approved',rejected:'badge-rejected ✕ Rejected',pending_approval:'badge-pending ⏳ Pending',assigned:'badge-assigned 👤 Assigned',accepted:'badge-accepted ▶ Accepted',completed:'badge-completed ✓ Completed',open:'badge-open 📌 Open',cancelled:'badge-cancelled ✕ Cancelled',onhold:'badge-onhold ⏸ On Hold',reassigned:'badge-reassigned ↺ Reassigned'};
   const v=m[s]||'badge-pending '+s; const[cls,...rest]=v.split(' ');
   return`<span class="badge ${cls}">${rest.join(' ')}</span>`;
 }
 function actTypeLabel(id){return ACT_TYPES.find(t=>t.id===id)||{label:id,icon:'📌'};}
+// Pretty name for analytics charts — "corporate_complaint" → "Corporate Complaint"
+function anTypeName(id){ const t=ACT_TYPES.find(x=>x.id===id); return t?`${t.icon} ${t.label}`:String(id||'Unknown').replace(/_/g,' ').replace(/\w/g,c=>c.toUpperCase()); }
 
 // ── AUDIT: NEW ────────────────────────────────────────────────
 function renderAuditNew(){
@@ -1305,13 +1346,39 @@ function filterApprTable(q) {
 
 function renderDashboard(){
   if(ACT_LOAD)return`<div class="empty-state"><div class="ei">⏳</div><p>Loading…</p></div>`;
-  const today=new Date().toISOString().slice(0,10);
-  const active=ALL_ACTS.filter(a=>a.assigned_to&&(a.status==='assigned'||a.status==='open'));
   const isCoordinator=AUTH&&AUTH.isCoordinator;
+  const myUid = AUTH ? AUTH.uid : null;
+
+  // Active activities: assigned/accepted/open
+  const active = ALL_ACTS.filter(a=>a.assigned_to && ['assigned','accepted','open'].includes(a.status));
+  // My pending = activities assigned to ME that need acceptance
+  const myPending = ALL_ACTS.filter(a => a.assigned_to === myUid && a.status === 'assigned');
+
   return`<div>
-<div class="page-hdr"><div><div class="page-title">📊 Today's Dashboard</div>
-<div class="page-sub">Active assigned activities · ${active.length} total</div></div>
-<button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button></div>
+<div class="page-hdr">
+  <div><div class="page-title">📊 Activity Dashboard</div>
+  <div class="page-sub">Active: ${active.length} · Pending your acceptance: ${myPending.length}</div></div>
+  <button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button>
+</div>
+${myPending.length>0?`
+<div class="card" style="border:2px solid #F59E0B;background:#FFFBEB">
+  <div style="font-weight:700;font-size:14px;color:#92400E;margin-bottom:12px">⚠️ ${myPending.length} activit${myPending.length===1?'y':'ies'} awaiting your acceptance</div>
+  <div style="overflow-x:auto"><table class="data-table">
+  <thead><tr><th>Type</th><th>Title</th><th>Region</th><th>Priority</th><th>Assigned By</th><th>Instructions</th><th>Action</th></tr></thead>
+  <tbody>${myPending.map(a=>{const t=actTypeLabel(a.type);return`<tr style="background:#FFFBEB">
+    <td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
+    <td><b>${escH(a.title||'—')}</b>${a.site_id?`<div style="font-size:11px;color:var(--muted)">${escH(a.site_id)}</div>`:''}</td>
+    <td style="font-size:12px;color:var(--muted)">${escH(a.region||'—')}</td>
+    <td><span class="tag">${escH(a.priority||'—')}</span></td>
+    <td style="font-size:12px;color:var(--muted)">${escH(a.created_by_name||'—')}</td>
+    <td style="font-size:12px;color:var(--muted);max-width:160px">${escH(a.instructions_team||'—')}</td>
+    <td style="white-space:nowrap">
+      <button class="btn btn-primary btn-sm" style="background:#059669" onclick="acceptActivity('${a.id}')">✅ Accept</button>
+      <button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="rejectActivity('${a.id}')">✕ Reject</button>
+    </td>
+  </tr>`; }).join('')}
+  </tbody></table></div>
+</div>`:``}
 ${!active.length?`<div class="empty-state"><div class="ei">✅</div><p>No active assigned activities.</p></div>`:`
 <div class="card"><div style="overflow-x:auto"><table class="data-table">
 <thead><tr>
@@ -1332,9 +1399,90 @@ ${!active.length?`<div class="empty-state"><div class="ei">✅</div><p>No active
 <td style="white-space:nowrap">
   <button class="btn btn-outline btn-sm" onclick="openActDetail(${idx},'all')">View</button>
   ${isCoordinator?`<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="openEditActivityModal('${a.id}')">✏ Edit</button>`:''}
+  ${a.assigned_to===myUid&&a.status==='assigned'?`<button class="btn btn-primary btn-sm" style="background:#059669;margin-left:4px" onclick="acceptActivity('${a.id}')">✅ Accept</button><button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="rejectActivity('${a.id}')">✕ Reject</button>`:''}
 </td>
 </tr>`;}).join('')}</tbody></table></div></div>`}
 </div>`;
+}
+
+async function acceptActivity(actId){
+  const ok = await DB.patch('activities', actId, {
+    status: 'accepted',
+    accepted_at: new Date().toISOString()
+  });
+  if(ok){ showToast('Activity accepted! Work can now begin.','success'); loadActivities(); }
+  else alert('Failed to accept activity. Please try again.');
+}
+
+async function rejectActivity(actId){
+  const a = ALL_ACTS.find(x=>x.id===actId);
+  if(!a) return;
+  const reasons = [
+    'POC not reachable / unavailable',
+    'Site access denied or locked',
+    'Required equipment not available',
+    'Safety concerns at site',
+    'Activity duplicated',
+    'Insufficient information provided',
+    'Beyond my role / skill set',
+    'Other (specify below)'
+  ];
+  const root = document.createElement('div');
+  root.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  root.innerHTML=`<div style="background:#fff;border-radius:14px;padding:24px;width:460px;max-width:100%;box-shadow:0 24px 80px rgba(0,0,0,.25)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <div style="width:36px;height:36px;border-radius:50%;background:#FEF2F2;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">✕</div>
+      <div>
+        <div style="font-size:15px;font-weight:800;color:#1E1E2E">Reject Activity</div>
+        <div style="font-size:12px;color:#6B7280">${escH(a.title||'—')}</div>
+      </div>
+    </div>
+    <div style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:8px;padding:10px 13px;font-size:12px;color:#7F1D1D;margin-bottom:14px">
+      ⚠️ Rejecting will notify the coordinator. They will need to re-assign this activity. Please provide a clear, honest reason.
+    </div>
+    <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:8px">Select reason:</div>
+    ${reasons.map((r,i)=>`<label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid #E5E7EB;border-radius:7px;cursor:pointer;margin-bottom:5px;font-size:13px;transition:all .12s" onmouseover="this.style.borderColor='#EF4444'" onmouseout="this.style.borderColor='#E5E7EB'">
+      <input type="radio" name="rr" value="${escH(r)}" ${i===0?'checked':''} style="accent-color:#EF4444"/> ${escH(r)}
+    </label>`).join('')}
+    <textarea id="rr-custom" placeholder="Describe the specific issue in detail..." style="width:100%;margin-top:8px;padding:10px;border:1.5px solid #E5E7EB;border-radius:8px;font-size:12px;resize:vertical;min-height:70px;font-family:inherit"></textarea>
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button id="rr-ok" style="flex:1;padding:10px;background:#DC2626;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer">✕ Submit Rejection</button>
+      <button id="rr-no" style="padding:10px 18px;background:#F3F4F6;color:#374151;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(root);
+  root.querySelector('#rr-no').onclick=()=>root.remove();
+  root.querySelectorAll('input[name=rr]').forEach(r=>{
+    r.onchange=()=>{
+      root.querySelector('#rr-custom').style.display = r.value.startsWith('Other')?'block':'none';
+    };
+  });
+  root.querySelector('#rr-ok').onclick = async()=>{
+    const sel = root.querySelector('input[name=rr]:checked');
+    const baseReason = sel ? sel.value : 'Rejected';
+    const custom = root.querySelector('#rr-custom').value.trim();
+    const reason = baseReason.startsWith('Other') ? (custom || 'No reason specified') : (custom ? `${baseReason}: ${custom}` : baseReason);
+    if(!reason){alert('Please select a reason.');return;}
+    root.remove();
+    const ok = await DB.patch('activities', actId, {
+      status: 'rejected',
+      rejection_reason: reason,
+      rejected_at: new Date().toISOString(),
+      assigned_to: null,
+      assigned_to_name: null
+    });
+    if(ok){ showToast('Activity rejected. Coordinator will be notified.','warning'); loadActivities(); }
+    else alert('Failed to submit rejection. Please try again.');
+  };
+}
+
+function showToast(msg, type='success'){
+  const t=document.createElement('div');
+  const colors={success:'#059669',warning:'#D97706',error:'#DC2626'};
+  t.style.cssText=`position:fixed;bottom:24px;right:24px;background:${colors[type]||colors.success};color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:600;z-index:99999;box-shadow:0 8px 24px rgba(0,0,0,.2);transition:all .3s;display:flex;align-items:center;gap:8px`;
+  t.innerHTML=`<span>${type==='success'?'✓':type==='warning'?'⚠️':'✕'}</span>${escH(msg)}`;
+  document.body.appendChild(t);
+  setTimeout(()=>{t.style.opacity='0';t.style.transform='translateY(10px)';setTimeout(()=>t.remove(),300);},4000);
 }
 
 function renderNewActivity(){
@@ -1455,23 +1603,33 @@ ${AUTH&&AUTH.isCoordinator?`<button class="btn btn-outline btn-sm" style="margin
 
 // ── ACTIVITIES: ASSIGN (Coordinator only) ─────────────────────
 function renderAssignActivities(){
-  const unassigned=ALL_ACTS.filter(a=>!a.assigned_to);
+  if(ACT_LOAD) return `<div class="empty-state"><div class="ei">⏳</div><p>Loading activities…</p></div>`;
+  // Only show truly open unassigned activities (not completed/cancelled/onhold)
+  const unassigned = ALL_ACTS.filter(a => !a.assigned_to && (a.status==='open' || !a.status));
+  // Also show assigned but rejected activities that need re-assignment
+  const rejected = ALL_ACTS.filter(a => a.status === 'rejected');
+  const needsAction = [...unassigned, ...rejected];
+  const ic = AUTH && AUTH.isCoordinator;
   return`<div>
-<div class="page-hdr"><div><div class="page-title">Assign Activities</div><div class="page-sub">Assign open activities to LCC agents</div></div>
-<button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button></div>
-${!unassigned.length?`<div class="empty-state"><div class="ei">✅</div><p>All activities are assigned.</p></div>`:`
-<div class="card"><table class="data-table">
-<thead><tr><th>Type</th><th>Title</th><th>Created By</th><th>Priority</th><th>Created</th><th>Action</th></tr></thead>
-<tbody>${unassigned.map((a,i)=>{const t=actTypeLabel(a.type);return`<tr>
+<div class="page-hdr">
+  <div><div class="page-title">Assign Activities</div>
+  <div class="page-sub">Unassigned: ${unassigned.length} · Rejected: ${rejected.length}</div></div>
+  <button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button>
+</div>
+${!needsAction.length?`<div class="empty-state"><div class="ei">✅</div><p>All activities are assigned. Nothing pending.</p></div>`:`
+<div class="card"><div style="overflow-x:auto"><table class="data-table">
+<thead><tr><th>Type</th><th>Title</th><th>Created By</th><th>Priority</th><th>Status</th><th>Created</th><th>Action</th></tr></thead>
+<tbody>${needsAction.map((a)=>{const t=actTypeLabel(a.type);return`<tr>
 <td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
 <td><b>${escH(a.title||'—')}</b>${a.site_id?`<div style="font-size:11px;color:var(--muted);font-family:var(--mono)">${escH(a.site_id)}</div>`:''}</td>
 <td style="font-size:12px;color:var(--muted)">${escH(a.created_by_name||'—')}</td>
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
+<td>${statusBadge(a.status||'open')}${a.status==='rejected'&&a.rejection_reason?`<div style="font-size:10px;color:var(--danger);margin-top:2px">Reason: ${escH(a.rejection_reason)}</div>`:''}</td>
 <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
-<td><button class="btn btn-primary btn-sm" onclick="openAssignModal('${a.id}')">👤 Assign</button>
-${isCoordinator&&a.assigned_to?`<button class="btn btn-outline btn-sm" style="font-size:11px;margin-left:4px" onclick="openReassignModal('${a.id}')">↺ Re-Assign</button>`:''}
+<td style="white-space:nowrap">
+  <button class="btn btn-primary btn-sm" onclick="openAssignModal('${a.id}')">👤 ${a.status==='rejected'?'Re-Assign':'Assign'}</button>
 </td>
-</tr>`;}).join('')}</tbody></table></div>`}
+</tr>`;}).join('')}</tbody></table></div></div>`}
 </div>`;}
 
 // ════════════════════════════════════════════════════════════════
@@ -2422,6 +2580,650 @@ document.addEventListener('DOMContentLoaded', function(){
     showApp();
   } catch(e){ console.log('Session restore failed:',e); }
 });
+
+// ════════════════════════════════════════════════════════════════
+// ANALYTICS DASHBOARD
+// ════════════════════════════════════════════════════════════════
+function renderAnalytics(){
+  return renderAnalyticsFull();
+}
+
+function renderAnalyticsFull(){
+  if(AN_LOAD) return `<div class="empty-state"><div class="ei">⏳</div><p>Loading analytics…</p></div>`;
+  if(!AN_DATA) return `<div class="empty-state"><div class="ei">📊</div><p>
+    <button class="btn btn-primary" onclick="loadAnalytics()">Load Analytics</button>
+  </p></div>`;
+  const data = AN_DATA || [];
+  if(!data.length) return `<div class="empty-state"><div class="ei">📊</div><p>No activity data found.</p></div>`;
+
+  // ── shared data ───────────────────────────────────────────────
+  const total      = data.length;
+  const completed  = data.filter(a=>a.status==='completed').length;
+  const active     = data.filter(a=>['open','assigned','accepted'].includes(a.status)).length;
+  const pending    = data.filter(a=>a.status==='open'&&!a.assigned_to).length;
+  const cancelled  = data.filter(a=>['cancelled','onhold'].includes(a.status)).length;
+  const rejected   = data.filter(a=>a.status==='rejected').length;
+  const rate       = total>0?((completed/total)*100).toFixed(1):'0.0';
+  const now        = Date.now();
+  const avgAging   = data.length?(data.reduce((s,a)=>{
+    const start=new Date(a.created_at||now).getTime();
+    const end=a.completed_at?new Date(a.completed_at).getTime():now;
+    return s+(end-start)/(1000*3600*24);
+  },0)/data.length).toFixed(1):'—';
+  const sevenDaysAgo = now - 7*24*3600*1000;
+  const recent     = data.filter(a=>new Date(a.created_at).getTime()>sevenDaysAgo);
+  const recentDone = data.filter(a=>a.completed_at&&new Date(a.completed_at).getTime()>sevenDaysAgo);
+  const TYPE_COLORS=['#6366F1','#F59E0B','#10B981','#EF4444','#3B82F6','#8B5CF6','#EC4899','#14B8A6','#F97316'];
+  const TEAM_COLORS=['#6366F1','#10B981','#F59E0B','#EF4444','#8B5CF6','#3B82F6','#EC4899','#14B8A6'];
+
+  // ── by type ───────────────────────────────────────────────────
+  const byType={};
+  data.forEach(a=>{
+    const t=a.type||'Unknown';
+    if(!byType[t])byType[t]={total:0,completed:0,open:0,days:[]};
+    byType[t].total++;
+    if(a.status==='completed')byType[t].completed++;
+    else if(['open','assigned','accepted'].includes(a.status))byType[t].open++;
+    const s=new Date(a.created_at||now).getTime(), e=a.completed_at?new Date(a.completed_at).getTime():now;
+    byType[t].days.push((e-s)/(1000*3600*24));
+  });
+  const typeEntries=Object.entries(byType).sort((a,b)=>b[1].total-a[1].total);
+  const maxType=typeEntries[0]?.[1]?.total||1;
+  typeEntries.forEach(([,d])=>{d.avgDays=d.days.length?(d.days.reduce((a,b)=>a+b,0)/d.days.length).toFixed(1):'—';});
+
+  // ── status donut ──────────────────────────────────────────────
+  const statusSegs=[
+    {val:completed,color:'#10B981',label:'Completed'},
+    {val:active,   color:'#6366F1',label:'Active'},
+    {val:pending,  color:'#F59E0B',label:'Unassigned'},
+    {val:cancelled,color:'#9CA3AF',label:'Cancelled'},
+    {val:rejected, color:'#EF4444',label:'Rejected'},
+  ].filter(s=>s.val>0);
+
+  // ── by agent ──────────────────────────────────────────────────
+  const byAgent={};
+  data.filter(a=>a.assigned_to_name).forEach(a=>{
+    const n=a.assigned_to_name;
+    if(!byAgent[n])byAgent[n]={total:0,completed:0,open:0,days:[]};
+    byAgent[n].total++;
+    if(a.status==='completed')byAgent[n].completed++;
+    else if(['open','assigned','accepted'].includes(a.status))byAgent[n].open++;
+    const s=new Date(a.created_at||now).getTime(), e=a.completed_at?new Date(a.completed_at).getTime():now;
+    byAgent[n].days.push((e-s)/(1000*3600*24));
+  });
+  const agentEntries=Object.entries(byAgent).sort((a,b)=>b[1].total-a[1].total);
+  agentEntries.forEach(([,d])=>{d.avgDays=d.days.length?(d.days.reduce((a,b)=>a+b,0)/d.days.length).toFixed(1):'—';});
+
+  // ── by POC ────────────────────────────────────────────────────
+  const byPoc={};
+  data.filter(a=>a.poc_name).forEach(a=>{
+    const n=a.poc_name;
+    if(!byPoc[n])byPoc[n]={total:0,completed:0};
+    byPoc[n].total++;if(a.status==='completed')byPoc[n].completed++;
+  });
+  const pocEntries=Object.entries(byPoc).sort((a,b)=>b[1].total-a[1].total);
+
+  // ── timeline ──────────────────────────────────────────────────
+  const byMonth={};
+  data.forEach(a=>{
+    if(!a.created_at)return;
+    const m=a.created_at.slice(0,7);
+    if(!byMonth[m])byMonth[m]={created:0,completed:0,open:0};
+    byMonth[m].created++;
+    if(a.status==='completed')byMonth[m].completed++;
+    else if(['open','assigned','accepted'].includes(a.status))byMonth[m].open++;
+  });
+  const months=Object.keys(byMonth).sort();
+  const maxVal=Math.max(...months.map(m=>byMonth[m].created),1);
+  const W=600, H=160, BW=Math.max(10,Math.floor(W/Math.max(months.length,1))-3);
+  const bars=months.map((m,i)=>{
+    const d=byMonth[m], x=(i/Math.max(months.length-1,1))*(W-BW);
+    const hC=(d.completed/maxVal)*H, hO=(d.open/maxVal)*H;
+    return `<g>
+      <rect x="${x}" y="${H-hC}" width="${BW*0.48}" height="${hC}" fill="#10B981" rx="2"/>
+      <rect x="${x+BW*0.52}" y="${H-hO}" width="${BW*0.48}" height="${hO}" fill="#6366F1" rx="2"/>
+      <text x="${x+BW*0.48}" y="${H+13}" text-anchor="middle" font-size="7" fill="#9CA3AF">${m.slice(5)}</text>
+    </g>`;
+  }).join('');
+
+  const SECTION = (title, content) =>
+    `<div style="background:#fff;border-radius:14px;padding:22px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:18px">
+      <div style="font-size:14px;font-weight:800;color:#111827;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid #F3F4F6">${title}</div>
+      ${content}
+    </div>`;
+
+  return `<div style="padding:0 2px">
+
+    <!-- ── Header ── -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <div>
+        <div style="font-size:19px;font-weight:800;color:#111827">📊 Analytics Dashboard</div>
+        <div style="font-size:13px;color:#6B7280;margin-top:2px">${total.toLocaleString()} activities · all time</div>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="loadAnalytics()">🔄 Refresh</button>
+    </div>
+
+    <!-- ── KPI Cards ── -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px;margin-bottom:18px">
+      ${anKv('Total Activities',total.toLocaleString(),'All time','#6366F1')}
+      ${anKv('Completed',completed.toLocaleString(),rate+'% rate','#10B981')}
+      ${anKv('Active',active.toLocaleString(),'In progress','#3B82F6')}
+      ${anKv('Unassigned',pending.toLocaleString(),'Awaiting assignment','#F59E0B')}
+      ${anKv('Avg Resolution',avgAging+' days','Time to close','#8B5CF6')}
+      ${anKv('Last 7 Days',recent.length.toLocaleString(),recentDone.length+' completed','#EC4899')}
+    </div>
+
+    <!-- ── Status + Category ── -->
+    <div style="display:grid;grid-template-columns:1fr 1.7fr;gap:16px;margin-bottom:18px">
+      ${SECTION('Status Distribution',
+        `<div style="display:flex;align-items:center;gap:20px">
+          <div style="flex-shrink:0">${anDonut(statusSegs,130)}</div>
+          <div style="flex:1">
+            ${statusSegs.map(s=>`<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">
+              <div style="width:10px;height:10px;border-radius:50%;background:${s.color};flex-shrink:0"></div>
+              <div style="font-size:12px;color:#374151;flex:1">${s.label}</div>
+              <div style="font-size:12px;font-weight:700;color:#111827">${s.val}</div>
+            </div>`).join('')}
+            <div style="margin-top:12px;padding:9px;background:#F0FDF4;border-radius:8px;text-align:center">
+              <div style="font-size:20px;font-weight:800;color:#065F46">${rate}%</div>
+              <div style="font-size:11px;color:#059669">Completion Rate</div>
+            </div>
+          </div>
+        </div>`
+      )}
+      ${SECTION('Activities by Category',
+        typeEntries.slice(0,9).map(([type,d],i)=>anBar(anTypeName(type),d.total,maxType,TYPE_COLORS[i%TYPE_COLORS.length])).join('')
+      )}
+    </div>
+
+    <!-- ── Priority ── -->
+    ${SECTION('Priority Breakdown',
+      `${[['Critical','#DC2626'],['High','#F59E0B'],['Medium','#6366F1'],['Low','#10B981']].map(([p,col])=>{
+          const cnt=data.filter(a=>(a.priority||'Medium')===p).length;
+          const done=data.filter(a=>(a.priority||'Medium')===p&&a.status==='completed').length;
+          const active=cnt-done;
+          const r2=cnt?((done/cnt)*100).toFixed(0):'0';
+          const maxW=Math.max(...[['Critical','#DC2626'],['High','#F59E0B'],['Medium','#6366F1'],['Low','#10B981']].map(([pp])=>data.filter(a=>(a.priority||'Medium')===pp).length),1);
+          const barW=cnt>0?Math.round((cnt/maxW)*100):0;
+          return `<div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid #F3F4F6">
+            <div style="width:72px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${col};flex-shrink:0">${p}</div>
+            <div style="flex:1;position:relative">
+              <div style="height:22px;background:#F3F4F6;border-radius:5px;overflow:hidden">
+                <div style="height:100%;width:${barW}%;background:${col};border-radius:5px;display:flex;align-items:center;padding-left:8px;transition:width .4s">
+                  ${barW>15?`<span style="font-size:11px;font-weight:700;color:#fff">${cnt}</span>`:''}
+                </div>
+              </div>
+              ${barW<=15&&cnt>0?`<span style="position:absolute;left:${barW+1}%;top:3px;font-size:11px;font-weight:700;color:${col}">${cnt}</span>`:''}
+            </div>
+            <div style="width:120px;flex-shrink:0;font-size:11px;color:#6B7280;text-align:right">${done} done · ${active} active · ${r2}%</div>
+          </div>`;
+        }).join('')}`
+    )}
+
+    <!-- ── Category Breakdown ── -->
+    ${SECTION('Category Breakdown',
+      `${typeEntries.map(([type,d],i)=>{
+          const pct=d.total>0?((d.completed/d.total)*100).toFixed(0):0;
+          const col=TYPE_COLORS[i%TYPE_COLORS.length];
+          const doneW=d.total>0?Math.round((d.completed/maxType)*100):0;
+          const openW=d.total>0?Math.round((d.open/maxType)*100):0;
+          const name=anTypeName(type);
+          return `<div style="display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid #F3F4F6">
+            <div style="width:170px;flex-shrink:0;font-size:12px;font-weight:600;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
+            <div style="flex:1">
+              <div style="height:22px;background:#F3F4F6;border-radius:5px;overflow:hidden;position:relative">
+                <div style="height:100%;width:${Math.round((d.total/maxType)*100)}%;background:${col};border-radius:5px;display:flex;align-items:center;padding-left:8px">
+                  ${Math.round((d.total/maxType)*100)>12?`<span style="font-size:11px;font-weight:700;color:#fff">${d.total}</span>`:''}
+                </div>
+              </div>
+            </div>
+            <div style="width:38px;text-align:right;font-size:12px;font-weight:700;color:${col};flex-shrink:0">${d.total}</div>
+            <div style="width:130px;flex-shrink:0;font-size:11px;color:#6B7280;text-align:right">${d.completed} done · ${d.open} active · ${pct}%</div>
+          </div>`;
+        }).join('')}`
+    )}
+
+    <!-- ── Team Performance ── -->
+    ${SECTION('Team Performance',
+      `<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:10px;text-transform:uppercase;letter-spacing:.6px">Field Agents</div>
+          ${!agentEntries.length?'<div style="color:#9CA3AF;font-size:13px">No assigned activities.</div>':
+          `<div style="overflow-x:auto"><table class="data-table" style="font-size:12px">
+            <thead><tr><th>Agent</th><th>Total</th><th>Done</th><th>Active</th><th>Avg Days</th><th>Rate</th></tr></thead>
+            <tbody>${agentEntries.map(([name,d],i)=>{
+              const col=TEAM_COLORS[i%TEAM_COLORS.length];
+              const pct=d.total>0?((d.completed/d.total)*100).toFixed(0):0;
+              return `<tr>
+                <td style="font-weight:600"><div style="display:flex;align-items:center;gap:6px"><div style="width:22px;height:22px;border-radius:50%;background:${col};color:#fff;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;flex-shrink:0">${name.slice(0,1).toUpperCase()}</div>${escH(name)}</div></td>
+                <td style="font-weight:700">${d.total}</td>
+                <td style="color:#059669;font-weight:600">${d.completed}</td>
+                <td style="color:#2563EB;font-weight:600">${d.open}</td>
+                <td style="color:#6B7280">${d.avgDays}</td>
+                <td><div style="height:5px;background:#F3F4F6;border-radius:3px;width:52px;overflow:hidden;display:inline-block;vertical-align:middle"><div style="height:100%;width:${pct}%;background:${col}"></div></div><span style="font-size:10px;color:#6B7280;margin-left:4px">${pct}%</span></td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table></div>`}
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#6B7280;margin-bottom:10px;text-transform:uppercase;letter-spacing:.6px">Open vs Closed by POC</div>
+          ${pocEntries.slice(0,10).map(([name,d])=>{
+            const done=d.completed, open2=d.total-d.completed;
+            return `<div style="margin-bottom:10px">
+              <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:3px">${escH(name)}</div>
+              <div style="display:flex;height:9px;border-radius:5px;overflow:hidden">
+                <div style="width:${d.total>0?(done/d.total*100):0}%;background:#10B981"></div>
+                <div style="width:${d.total>0?(open2/d.total*100):0}%;background:#E5E7EB"></div>
+              </div>
+              <div style="display:flex;gap:10px;font-size:10px;color:#6B7280;margin-top:2px"><span>✓ ${done}</span><span>○ ${open2}</span></div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`
+    )}
+
+    <!-- ── Monthly Timeline ── -->
+    ${SECTION('Monthly Volume',
+      `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <span style="font-size:13px;color:#374151;font-weight:600">${months.length} months of data</span>
+        <div style="display:flex;gap:12px;font-size:11px">
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#10B981;display:inline-block"></span> Completed</span>
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#6366F1;display:inline-block"></span> Active</span>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <svg width="${Math.max(W,months.length*18)}" height="${H+28}" style="display:block">
+          ${[0,0.25,0.5,0.75,1].map(f=>{const y=H-f*H;return`<line x1="0" y1="${y}" x2="${Math.max(W,months.length*18)}" y2="${y}" stroke="#F3F4F6" stroke-width="1"/><text x="2" y="${y-2}" font-size="8" fill="#D1D5DB">${Math.round(f*maxVal)}</text>`;}).join('')}
+          ${bars}
+        </svg>
+      </div>
+      <div style="overflow-x:auto;margin-top:16px"><table class="data-table" style="font-size:11px">
+        <thead><tr><th>Month</th><th>Created</th><th>Completed</th><th>Active</th><th>Rate</th></tr></thead>
+        <tbody>${months.slice().reverse().slice(0,18).map(m=>{
+          const d=byMonth[m];
+          const pct=d.created>0?((d.completed/d.created)*100).toFixed(1):0;
+          const col=pct>=80?'#059669':pct>=50?'#D97706':'#DC2626';
+          return`<tr><td style="font-weight:700">${m}</td><td>${d.created}</td><td style="color:#059669;font-weight:600">${d.completed}</td><td style="color:#2563EB;font-weight:600">${d.open}</td><td><span style="color:${col};font-weight:700">${pct}%</span></td></tr>`;
+        }).join('')}</tbody>
+      </table></div>`
+    )}
+
+  </div>`;
+}
+
+function anKv(label,val,sub,color){
+  return `<div style="background:#fff;border-radius:14px;padding:20px 22px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);position:relative;overflow:hidden">
+    <div style="position:absolute;top:0;left:0;width:4px;height:100%;background:${color||'#6366F1'};border-radius:4px 0 0 4px"></div>
+    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#9CA3AF;margin-bottom:6px">${label}</div>
+    <div style="font-size:30px;font-weight:800;color:#111827;line-height:1;margin-bottom:4px">${val}</div>
+    ${sub?`<div style="font-size:12px;color:#6B7280">${sub}</div>`:''}
+  </div>`;
+}
+
+function anBar(label,val,max,color,pct){
+  const p = max>0 ? Math.round((val/max)*100) : 0;
+  const display = pct ? p+'%' : val;
+  return `<div style="margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <span style="font-size:12px;font-weight:600;color:#374151">${label}</span>
+      <span style="font-size:12px;font-weight:700;color:${color||'#6366F1'}">${display}</span>
+    </div>
+    <div style="height:8px;background:#F3F4F6;border-radius:4px;overflow:hidden">
+      <div style="height:100%;width:${p}%;background:${color||'#6366F1'};border-radius:4px;transition:width .5s"></div>
+    </div>
+  </div>`;
+}
+
+function anDonut(segments, size){
+  // segments = [{val, color, label}]
+  const total = segments.reduce((s,x)=>s+x.val,0);
+  if(!total) return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#F3F4F6;display:flex;align-items:center;justify-content:center;font-size:11px;color:#9CA3AF">No data</div>`;
+  let cumulative = 0;
+  const R = size/2, r_outer = R-4, r_inner = R*0.58;
+  let paths = '';
+  segments.forEach(seg => {
+    if(!seg.val) return;
+    const startAngle = (cumulative/total)*360 - 90;
+    const endAngle   = ((cumulative+seg.val)/total)*360 - 90;
+    cumulative += seg.val;
+    const large = (endAngle - startAngle) > 180 ? 1 : 0;
+    const toRad = a => a * Math.PI/180;
+    const x1 = R + r_outer*Math.cos(toRad(startAngle));
+    const y1 = R + r_outer*Math.sin(toRad(startAngle));
+    const x2 = R + r_outer*Math.cos(toRad(endAngle));
+    const y2 = R + r_outer*Math.sin(toRad(endAngle));
+    const x3 = R + r_inner*Math.cos(toRad(endAngle));
+    const y3 = R + r_inner*Math.sin(toRad(endAngle));
+    const x4 = R + r_inner*Math.cos(toRad(startAngle));
+    const y4 = R + r_inner*Math.sin(toRad(startAngle));
+    paths += `<path d="M${x1.toFixed(2)},${y1.toFixed(2)} A${r_outer},${r_outer} 0 ${large},1 ${x2.toFixed(2)},${y2.toFixed(2)} L${x3.toFixed(2)},${y3.toFixed(2)} A${r_inner},${r_inner} 0 ${large},0 ${x4.toFixed(2)},${y4.toFixed(2)} Z" fill="${seg.color}"/>`;
+  });
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}</svg>`;
+}
+
+function renderAnalyticsOverview(){
+  const data = AN_DATA || [];
+  const total = data.length;
+  const completed = data.filter(a=>a.status==='completed').length;
+  const open = data.filter(a=>['open','assigned','accepted'].includes(a.status)).length;
+  const pending = data.filter(a=>a.status==='open'&&!a.assigned_to).length;
+  const cancelled = data.filter(a=>['cancelled','onhold'].includes(a.status)).length;
+  const rejected = data.filter(a=>a.status==='rejected').length;
+  const rate = total>0 ? ((completed/total)*100).toFixed(1) : '0.0';
+  
+  // Aging: average days between created_at and completed_at (or now)
+  const now = Date.now();
+  const avgAging = data.length ? (data.reduce((s,a)=>{
+    const start = new Date(a.created_at||now).getTime();
+    const end = a.completed_at ? new Date(a.completed_at).getTime() : now;
+    return s + (end-start)/(1000*3600*24);
+  },0)/data.length).toFixed(1) : '—';
+  
+  // By type
+  const byType = {};
+  const TYPE_COLORS=['#6366F1','#F59E0B','#10B981','#EF4444','#3B82F6','#8B5CF6','#EC4899','#14B8A6','#F97316'];
+  data.forEach(a=>{byType[a.type||'Unknown']=(byType[a.type||'Unknown']||0)+1;});
+  const typeEntries = Object.entries(byType).sort((a,b)=>b[1]-a[1]);
+  const maxType = typeEntries[0]?.[1]||1;
+  
+  // Status donut
+  const statusSegs = [
+    {val:completed, color:'#10B981', label:'Completed'},
+    {val:open,      color:'#6366F1', label:'Active'},
+    {val:pending,   color:'#F59E0B', label:'Unassigned'},
+    {val:cancelled, color:'#9CA3AF', label:'Cancelled'},
+    {val:rejected,  color:'#EF4444', label:'Rejected'},
+  ].filter(s=>s.val>0);
+  
+  // Recent activity (last 7 days)
+  const sevenDaysAgo = Date.now() - 7*24*3600*1000;
+  const recent = data.filter(a=>new Date(a.created_at).getTime()>sevenDaysAgo);
+  const recentCompleted = data.filter(a=>a.completed_at&&new Date(a.completed_at).getTime()>sevenDaysAgo);
+  
+  return `<div style="padding:0 4px">
+    <div style="margin-bottom:20px">
+      <div style="font-size:18px;font-weight:800;color:#111827">📈 Activities Overview</div>
+      <div style="font-size:13px;color:#6B7280;margin-top:2px">${total.toLocaleString()} total activities across all time</div>
+    </div>
+    
+    <!-- KPI Cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px">
+      ${anKv('Total Assigned', total.toLocaleString(), 'All time', '#6366F1')}
+      ${anKv('Completed', completed.toLocaleString(), `${rate}% completion rate`, '#10B981')}
+      ${anKv('Active', open.toLocaleString(), 'assigned/accepted', '#3B82F6')}
+      ${anKv('Open/Pending', pending.toLocaleString(), 'Awaiting assignment', '#F59E0B')}
+      ${anKv('Avg Aging', avgAging+' days', 'Time to resolution', '#8B5CF6')}
+      ${anKv('Last 7 Days', recent.length.toLocaleString(), `${recentCompleted.length} completed`, '#EC4899')}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:16px;margin-bottom:20px">
+      <!-- Status Distribution Donut -->
+      <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:16px">Status Distribution</div>
+        <div style="display:flex;align-items:center;gap:20px">
+          <div style="flex-shrink:0">
+            ${anDonut(statusSegs, 140)}
+          </div>
+          <div style="flex:1">
+            ${statusSegs.map(s=>`
+              <div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">
+                <div style="width:10px;height:10px;border-radius:50%;background:${s.color};flex-shrink:0"></div>
+                <div style="font-size:12px;color:#374151;flex:1">${s.label}</div>
+                <div style="font-size:12px;font-weight:700;color:#111827">${s.val}</div>
+              </div>`).join('')}
+          </div>
+        </div>
+        <div style="margin-top:14px;padding:10px;background:#F0FDF4;border-radius:8px;text-align:center">
+          <div style="font-size:22px;font-weight:800;color:#065F46">${rate}%</div>
+          <div style="font-size:11px;color:#059669">Completion Rate</div>
+        </div>
+      </div>
+
+      <!-- By Type Bars -->
+      <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:16px">Activities by Category</div>
+        ${typeEntries.slice(0,9).map(([type,cnt],i)=>anBar(anTypeName(type),cnt,maxType,TYPE_COLORS[i%TYPE_COLORS.length])).join('')}
+      </div>
+    </div>
+    
+    <!-- Priority Breakdown -->
+    <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:20px">
+      <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:14px">Priority Breakdown</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">
+        ${[['Critical','#DC2626'],['High','#F59E0B'],['Medium','#6366F1'],['Low','#10B981']].map(([p,col])=>{
+          const cnt = data.filter(a=>(a.priority||'Medium')===p).length;
+          const done = data.filter(a=>(a.priority||'Medium')===p&&a.status==='completed').length;
+          const r2 = cnt ? ((done/cnt)*100).toFixed(0) : '0';
+          return `<div style="background:#F9FAFB;border-radius:10px;padding:14px;border:1.5px solid ${col}30;text-align:center">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${col};margin-bottom:6px">${p}</div>
+            <div style="font-size:26px;font-weight:800;color:#111827">${cnt}</div>
+            <div style="font-size:11px;color:#6B7280;margin-top:3px">${done} done (${r2}%)</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderAnalyticsByType(){
+  const data = AN_DATA || [];
+  const TYPE_COLORS=['#6366F1','#F59E0B','#10B981','#EF4444','#3B82F6','#8B5CF6','#EC4899','#14B8A6','#F97316'];
+  const byType={};
+  data.forEach(a=>{const t=a.type||'Unknown';if(!byType[t])byType[t]={total:0,completed:0,open:0,cancelled:0,avgDays:0,days:[]};byType[t].total++;if(a.status==='completed')byType[t].completed++;else if(['open','assigned','accepted'].includes(a.status))byType[t].open++;else if(['cancelled','onhold'].includes(a.status))byType[t].cancelled++;const start=new Date(a.created_at||Date.now()).getTime();const end=a.completed_at?new Date(a.completed_at).getTime():Date.now();byType[t].days.push((end-start)/(1000*3600*24));});
+  Object.values(byType).forEach(t=>{t.avgDays=t.days.length?(t.days.reduce((a,b)=>a+b,0)/t.days.length).toFixed(1):'—';delete t.days;});
+  const entries = Object.entries(byType).sort((a,b)=>b[1].total-a[1].total);
+  
+  return `<div>
+    <div style="font-size:18px;font-weight:800;color:#111827;margin-bottom:4px">🏷 Breakdown by Category</div>
+    <div style="font-size:13px;color:#6B7280;margin-bottom:18px">${entries.length} categories</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">
+      ${entries.map(([type,d],i)=>{
+        const pct = d.total>0?((d.completed/d.total)*100).toFixed(0):0;
+        const col = TYPE_COLORS[i%TYPE_COLORS.length];
+        return `<div style="background:#fff;border-radius:14px;padding:18px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);border-top:3px solid ${col}">
+          <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:12px">${anTypeName(type)}</div>
+          <div style="font-size:28px;font-weight:800;color:${col};margin-bottom:8px">${d.total}</div>
+          <div style="height:6px;background:#F3F4F6;border-radius:3px;overflow:hidden;margin-bottom:10px">
+            <div style="height:100%;width:${pct}%;background:${col};border-radius:3px"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
+            <div style="background:#F0FDF4;border-radius:6px;padding:6px 8px;text-align:center">
+              <div style="font-weight:700;color:#059669">${d.completed}</div>
+              <div style="color:#6B7280">Completed</div>
+            </div>
+            <div style="background:#EFF6FF;border-radius:6px;padding:6px 8px;text-align:center">
+              <div style="font-weight:700;color:#2563EB">${d.open}</div>
+              <div style="color:#6B7280">Active</div>
+            </div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:#9CA3AF;text-align:center">Avg ${d.avgDays} days to resolve · ${pct}% done</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function renderAnalyticsByTeam(){
+  const data = AN_DATA || [];
+  const TEAM_COLORS=['#6366F1','#10B981','#F59E0B','#EF4444','#8B5CF6','#3B82F6','#EC4899','#14B8A6'];
+  
+  // By assigned agent
+  const byAgent={};
+  data.filter(a=>a.assigned_to_name).forEach(a=>{
+    const n=a.assigned_to_name;
+    if(!byAgent[n])byAgent[n]={total:0,completed:0,open:0,rejected:0,avgDays:0,days:[]};
+    byAgent[n].total++;
+    if(a.status==='completed')byAgent[n].completed++;
+    else if(['open','assigned','accepted'].includes(a.status))byAgent[n].open++;
+    if(a.status==='rejected')byAgent[n].rejected++;
+    const start=new Date(a.created_at||Date.now()).getTime();
+    const end=a.completed_at?new Date(a.completed_at).getTime():Date.now();
+    byAgent[n].days.push((end-start)/(1000*3600*24));
+  });
+  Object.values(byAgent).forEach(t=>{t.avgDays=t.days.length?(t.days.reduce((a,b)=>a+b,0)/t.days.length).toFixed(1):'—';delete t.days;});
+  
+  // By CMPAK POC
+  const byPoc={};
+  data.filter(a=>a.poc_name).forEach(a=>{
+    const n=a.poc_name;
+    if(!byPoc[n])byPoc[n]={total:0,completed:0};
+    byPoc[n].total++;
+    if(a.status==='completed')byPoc[n].completed++;
+  });
+  
+  const agentEntries = Object.entries(byAgent).sort((a,b)=>b[1].total-a[1].total);
+  const pocEntries = Object.entries(byPoc).sort((a,b)=>b[1].total-a[1].total);
+  const maxAgent = agentEntries[0]?.[1]?.total||1;
+  
+  return `<div>
+    <div style="font-size:18px;font-weight:800;color:#111827;margin-bottom:18px">👥 Team Performance</div>
+    <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px">
+      <!-- Agent Table -->
+      <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:14px">LCC Field Agents</div>
+        ${!agentEntries.length?`<div style="color:#9CA3AF;font-size:13px">No assigned activities found.</div>`:`
+        <div style="overflow-x:auto"><table class="data-table" style="font-size:12px">
+          <thead><tr><th>Agent</th><th>Total</th><th>Done</th><th>Active</th><th>Avg Days</th><th>Rate</th></tr></thead>
+          <tbody>${agentEntries.map(([name,d],i)=>{
+            const col=TEAM_COLORS[i%TEAM_COLORS.length];
+            const pct=d.total>0?((d.completed/d.total)*100).toFixed(0):0;
+            return `<tr>
+              <td style="font-weight:600"><div style="display:flex;align-items:center;gap:6px"><div style="width:22px;height:22px;border-radius:50%;background:${col};color:#fff;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;flex-shrink:0">${name.slice(0,1).toUpperCase()}</div>${escH(name)}</div></td>
+              <td style="font-weight:700">${d.total}</td>
+              <td style="color:#059669;font-weight:600">${d.completed}</td>
+              <td style="color:#2563EB;font-weight:600">${d.open}</td>
+              <td style="color:#6B7280">${d.avgDays}</td>
+              <td><div style="height:5px;background:#F3F4F6;border-radius:3px;width:60px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${col}"></div></div><span style="font-size:10px;color:#6B7280">${pct}%</span></td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>`}
+      </div>
+      <!-- POC Bars -->
+      <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:14px">Open vs Closed by POC</div>
+        ${pocEntries.slice(0,10).map(([name,d],i)=>{
+          const done=d.completed, open=d.total-d.completed;
+          return `<div style="margin-bottom:10px">
+            <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:3px">${escH(name)}</div>
+            <div style="display:flex;height:10px;border-radius:5px;overflow:hidden">
+              <div style="width:${d.total>0?(done/d.total*100):0}%;background:#10B981" title="Completed: ${done}"></div>
+              <div style="width:${d.total>0?(open/d.total*100):0}%;background:#E5E7EB" title="Open: ${open}"></div>
+            </div>
+            <div style="display:flex;gap:10px;font-size:10px;color:#6B7280;margin-top:2px">
+              <span>✓ ${done} done</span><span>○ ${open} open</span>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderAnalyticsTimeline(){
+  const data = AN_DATA || [];
+  if(!data.length) return `<div class="empty-state"><div class="ei">📅</div><p>No activity data available.</p></div>`;
+  
+  // Group by month
+  const byMonth={};
+  data.forEach(a=>{
+    if(!a.created_at) return;
+    const m = a.created_at.slice(0,7); // YYYY-MM
+    if(!byMonth[m])byMonth[m]={created:0,completed:0,open:0};
+    byMonth[m].created++;
+    if(a.status==='completed') byMonth[m].completed++;
+    else if(['open','assigned','accepted'].includes(a.status)) byMonth[m].open++;
+  });
+  const months = Object.keys(byMonth).sort();
+  const maxVal = Math.max(...months.map(m=>byMonth[m].created), 1);
+  
+  // Activity trend SVG bar chart
+  const W = 600, H = 180, BAR_W = Math.max(12, Math.floor(W/months.length)-4);
+  const bars = months.map((m,i)=>{
+    const d=byMonth[m];
+    const x = (i/(months.length||1))*W;
+    const hC = (d.completed/maxVal)*H;
+    const hO = (d.open/maxVal)*H;
+    const hN = ((d.created-d.completed-d.open)/maxVal)*H;
+    return `<g>
+      <rect x="${x}" y="${H-hC}" width="${BAR_W*0.45}" height="${hC}" fill="#10B981" rx="2"/>
+      <rect x="${x+BAR_W*0.5}" y="${H-hO}" width="${BAR_W*0.45}" height="${hO}" fill="#6366F1" rx="2"/>
+      <text x="${x+BAR_W*0.4}" y="${H+14}" text-anchor="middle" font-size="7" fill="#9CA3AF">${m.slice(5)}</text>
+    </g>`;
+  }).join('');
+  
+  // Average aging by month
+  const agingByMonth={};
+  data.forEach(a=>{
+    if(!a.completed_at) return;
+    const m=a.completed_at.slice(0,7);
+    if(!agingByMonth[m])agingByMonth[m]=[];
+    const start=new Date(a.created_at).getTime();
+    const end=new Date(a.completed_at).getTime();
+    agingByMonth[m].push((end-start)/(1000*3600*24));
+  });
+  const agingMonths = Object.keys(agingByMonth).sort().slice(-12);
+  const agingData = agingMonths.map(m=>({m, avg: agingByMonth[m].reduce((a,b)=>a+b,0)/agingByMonth[m].length}));
+  const maxAging = Math.max(...agingData.map(d=>d.avg), 1);
+  
+  return `<div>
+    <div style="font-size:18px;font-weight:800;color:#111827;margin-bottom:18px">📅 Activity Timeline</div>
+    
+    <!-- Monthly Trend Chart -->
+    <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;color:#111827">Monthly Activity Volume (${months.length} months)</div>
+        <div style="display:flex;gap:12px;font-size:11px">
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#10B981;display:inline-block"></span> Completed</span>
+          <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:#6366F1;display:inline-block"></span> Active</span>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <svg width="${Math.max(W,months.length*20)}" height="${H+30}" style="display:block">
+          <g>
+            ${[0,0.25,0.5,0.75,1].map(frac=>{const y=H-frac*H;return`<line x1="0" y1="${y}" x2="${Math.max(W,months.length*20)}" y2="${y}" stroke="#F3F4F6" stroke-width="1"/><text x="-2" y="${y+4}" text-anchor="end" font-size="8" fill="#9CA3AF">${Math.round(frac*maxVal)}</text>`;}).join('')}
+          </g>
+          ${bars}
+        </svg>
+      </div>
+    </div>
+    
+    <!-- Avg Aging Trend -->
+    ${agingData.length?`<div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:16px">
+      <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:14px">Average Resolution Time (days) — Last ${agingData.length} Months</div>
+      <div style="display:flex;align-items:flex-end;gap:6px;height:80px;padding-top:10px">
+        ${agingData.map(({m,avg})=>{
+          const h=Math.round((avg/maxAging)*70);
+          const col = avg<2?'#10B981':avg<5?'#6366F1':avg<10?'#F59E0B':'#EF4444';
+          return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px">
+            <div style="font-size:9px;font-weight:700;color:${col}">${avg.toFixed(1)}</div>
+            <div style="width:100%;background:${col};border-radius:3px 3px 0 0;height:${h}px"></div>
+            <div style="font-size:8px;color:#9CA3AF;transform:rotate(-45deg);transform-origin:top right;white-space:nowrap">${m.slice(5)}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`:''}
+    
+    <!-- Month-by-Month Table -->
+    <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+      <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:14px">Monthly Breakdown</div>
+      <div style="overflow-x:auto"><table class="data-table" style="font-size:12px">
+        <thead><tr><th>Month</th><th>Created</th><th>Completed</th><th>Active</th><th>Completion %</th></tr></thead>
+        <tbody>${months.slice().reverse().slice(0,24).map(m=>{
+          const d=byMonth[m];
+          const pct=d.created>0?((d.completed/d.created)*100).toFixed(1):0;
+          const col=pct>=80?'#059669':pct>=50?'#D97706':'#DC2626';
+          return `<tr>
+            <td style="font-weight:700">${m}</td>
+            <td>${d.created}</td>
+            <td style="color:#059669;font-weight:600">${d.completed}</td>
+            <td style="color:#2563EB;font-weight:600">${d.open}</td>
+            <td><span style="color:${col};font-weight:700">${pct}%</span></td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>
+  </div>`;
+}
 </script>
 </body>
 </html>
