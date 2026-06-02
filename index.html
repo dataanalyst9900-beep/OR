@@ -815,7 +815,22 @@ async function submitAudit() {
 }
 async function loadAuditHistory() {
   HIST_LOAD=true; renderPage();
-  MY_AUDITS=await DB.get('/rest/v1/site_audits?submitted_by=eq.'+AUTH.uid+'&order=submitted_at.desc&limit=100');
+  if(AUTH.isCoordinator){
+    // Ensure AGENTS (LCC users) are loaded — needed for uid-based filtering
+    if(!AGENTS.length){
+      AGENTS = await DB.get('/rest/v1/users?company=ilike.*LCC*&select=uid,name,email,role&order=name.asc');
+    }
+    const lccUids = new Set(AGENTS.map(a=>a.uid));
+    // Load ALL audits, filter client-side:
+    // match by submitted_by UID being LCC agent, OR company field = 'LCC' (any case)
+    const allAudits = await DB.get('/rest/v1/site_audits?order=submitted_at.desc&limit=500');
+    MY_AUDITS = allAudits.filter(a=>
+      lccUids.has(a.submitted_by) ||
+      (a.company||'').toUpperCase()==='LCC'
+    );
+  } else {
+    MY_AUDITS=await DB.get('/rest/v1/site_audits?submitted_by=eq.'+AUTH.uid+'&order=submitted_at.desc&limit=100');
+  }
   HIST_LOAD=false; renderPage();
 }
 async function loadApproverGrids() {
@@ -875,12 +890,14 @@ function restoreSectors(sectors) {
 // ════════════════════════════════════════════════════════════════
 async function loadActivities() {
   ACT_LOAD=true;
-  MY_ACTS  = await DB.get('/rest/v1/activities?created_by=eq.'+AUTH.uid+'&order=created_at.desc&limit=100');
-  ALL_ACTS = await DB.get('/rest/v1/activities?order=created_at.desc&limit=500');
-  AGENTS      = await DB.get('/rest/v1/users?company=ilike.*LCC*&select=uid,name,email,role&order=name.asc');
-  // Use ilike for case-insensitive company match
-  CMPAK_USERS = await DB.get('/rest/v1/users?company=ilike.*CMPAK*&select=uid,name,email,role&order=name.asc');
-  console.log('CMPAK users loaded:', CMPAK_USERS.length);
+  try {
+    MY_ACTS      = await DB.get('/rest/v1/activities?created_by=eq.'+AUTH.uid+'&order=created_at.desc&limit=100');
+    ALL_ACTS     = await DB.get('/rest/v1/activities?order=created_at.desc&limit=500');
+    AGENTS       = await DB.get('/rest/v1/users?company=ilike.*LCC*&select=uid,name,email,role&order=name.asc');
+    CMPAK_USERS  = await DB.get('/rest/v1/users?company=ilike.*CMPAK*&select=uid,name,email,role&order=name.asc');
+  } catch(e) {
+    console.error('loadActivities error:', e);
+  }
   ACT_LOAD=false; renderPage();
 }
 async function submitActivity() {
@@ -894,7 +911,84 @@ async function submitActivity() {
   if(ok){ACT_TYPE_SEL='';ACT_TITLE='';ACT_DESC='';ACT_SITE='';ACT_REGION='';ACT_PRIORITY='Medium';ACT_POC='';ACT_COMPLAINT_LAT='';ACT_COMPLAINT_LNG='';ACT_COMPLAINT_POC='';ACT_INSTR_TEAM='';loadActivities();}
   renderPage();
 }
+async function exportActivitiesCSV(){
+  const data=ALL_ACTS||[];
+  if(!data.length){alert('No activities loaded.');return;}
+  const H=['ID','Type','Title','Region','Site ID','Priority','Status','Created By','Assigned To','POC',
+    'Created','Assigned','Completed','Log Files','Final Report',
+    'Complaint Lat','Complaint Lng','Complaint POC','Instructions Team',
+    'Cancellation Reason','Parent Activity ID'];
+  const rows=data.map(a=>[
+    a.id,a.type||'',escCSV(a.title||''),a.region||'',a.site_id||'',a.priority||'',a.status||'',
+    escCSV(a.created_by_name||''),escCSV(a.assigned_to_name||''),escCSV(a.poc_name||''),
+    (a.created_at||'').slice(0,16),(a.assigned_at||'').slice(0,16),(a.completed_at||'').slice(0,16),
+    (()=>{try{return JSON.parse(a.log_files||'[]').length;}catch(e){return a.log_file_url?1:0;}})(),
+    a.final_report_url?'Yes':'No',
+    a.complaint_lat||'',a.complaint_lng||'',escCSV(a.complaint_poc||''),escCSV(a.instructions_team||''),
+    escCSV(a.cancellation_reason||''),a.parent_activity_id||''
+  ].join(','));
+  const blob=new Blob([[H.join(','),...rows].join('\n')],{type:'text/csv'});
+  const el=document.createElement('a');
+  el.href=URL.createObjectURL(blob);
+  el.download='activities_'+new Date().toISOString().slice(0,10)+'.csv';
+  document.body.appendChild(el); el.click(); document.body.removeChild(el);
+}
+function escCSV(s){s=String(s||'');return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s;}
+
+async function openReassignModal(actId){
+  const a=ALL_ACTS.find(x=>x.id===actId);
+  if(!a)return;
+  if(!AGENTS.length){alert('No LCC agents loaded.');return;}
+  const agentOpts=AGENTS.map(ag=>`<option value="${ag.uid}">${escH(ag.name||ag.email)}</option>`).join('');
+  const root=document.createElement('div');
+  root.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  root.innerHTML=`<div style="background:var(--surface);border-radius:12px;padding:24px;width:360px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+    <div style="font-size:15px;font-weight:700;margin-bottom:4px">Re-Assign Activity</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Creates a new activity entry with reference to original</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:14px;padding:8px;background:var(--bg);border-radius:7px;border:1px solid var(--border)">${escH(a.title||a.type||'')}</div>
+    <div style="font-size:12px;font-weight:600;margin-bottom:6px">Assign to</div>
+    <select id="reassign-agent" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:7px;font-size:13px;margin-bottom:16px">
+      <option value="">— Select Agent —</option>
+      ${agentOpts}
+    </select>
+    <div style="display:flex;gap:8px">
+      <button id="ra-ok" class="btn btn-primary btn-sm" style="flex:1">↺ Re-Assign</button>
+      <button id="ra-no" class="btn btn-outline btn-sm">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(root);
+  root.querySelector('#ra-no').onclick=()=>root.remove();
+  root.querySelector('#ra-ok').onclick=async()=>{
+    const sel=root.querySelector('#reassign-agent');
+    const agentUid=sel.value;
+    if(!agentUid){alert('Please select an agent.');return;}
+    const agent=AGENTS.find(x=>x.uid===agentUid);
+    root.remove();
+    const newId=crypto.randomUUID();
+    const ok=await DB.post('activities',{
+      id:newId,type:a.type,title:a.title,description:a.description,
+      site_id:a.site_id,region:a.region,priority:a.priority,
+      poc_uid:a.poc_uid,poc_name:a.poc_name,
+      complaint_lat:a.complaint_lat,complaint_lng:a.complaint_lng,
+      complaint_poc:a.complaint_poc,instructions_team:a.instructions_team,
+      status:'assigned',created_by:a.created_by,created_by_name:a.created_by_name,
+      company:a.company,created_at:a.created_at,
+      assigned_to:agentUid,assigned_to_name:agent?.name||agentUid,
+      assigned_at:new Date().toISOString(),
+      parent_activity_id:a.id,
+      completed_at:null,completion_remarks:null,
+      log_file_url:null,log_file_name:null,log_received_at:null,
+      final_report_url:null,final_report_name:null,final_report_at:null
+    });
+    if(ok){
+      await DB.patch('activities',a.id,{status:'reassigned',reassigned_to:agentUid,reassigned_at:new Date().toISOString()});
+      loadActivities();
+    } else alert('Re-assignment failed.');
+  };
+}
+
 async function assignActivity(actId, agentUid, agentName) {
+  // Always patch the same entry — coordinator can reassign at any time
   const ok=await DB.patch('activities',actId,{assigned_to:agentUid,assigned_to_name:agentName,status:'assigned',assigned_at:new Date().toISOString()});
   if(ok){closeModal();loadActivities();}else alert('Assignment failed.');
 }
@@ -979,6 +1073,8 @@ function switchModule(m){
   const lmBtn=document.getElementById('mod-livemap');
   if(lmBtn)lmBtn.classList.remove('active');
   MODULE=m;
+  if(m==='activity'){ AC_PAGE='dashboard'; loadActivities(); }
+  if(m==='audit') A_PAGE='new';
   render();
 }
 
@@ -1041,14 +1137,14 @@ function renderPage(){render();}
 function auditNav(p){
   A_PAGE=p;if(p==='history')loadAuditHistory();if(p==='approvals'){if(APPROVER_GRIDS.length===0)loadApproverGrids();else loadPending();}render();
 }
-function actNav(p){AC_PAGE=p;if(p!=='new_activity')loadActivities();render();}
+function actNav(p){AC_PAGE=p;loadActivities();render();}
 
 // helpers
 function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function fmtDate(iso){return iso?iso.slice(0,10):'—';}
 function fmtDT(iso){return iso?iso.slice(0,16).replace('T',' '):'—';}
 function statusBadge(s){
-  const m={approved:'badge-approved ✓ Approved',rejected:'badge-rejected ✕ Rejected',pending_approval:'badge-pending ⏳ Pending',assigned:'badge-assigned 👤 Assigned',completed:'badge-completed ✓ Completed',open:'badge-open 📌 Open'};
+  const m={approved:'badge-approved ✓ Approved',rejected:'badge-rejected ✕ Rejected',pending_approval:'badge-pending ⏳ Pending',assigned:'badge-assigned 👤 Assigned',completed:'badge-completed ✓ Completed',open:'badge-open 📌 Open',cancelled:'badge-cancelled ✕ Cancelled',onhold:'badge-onhold ⏸ On Hold',reassigned:'badge-reassigned ↺ Reassigned'};
   const v=m[s]||'badge-pending '+s; const[cls,...rest]=v.split(' ');
   return`<span class="badge ${cls}">${rest.join(' ')}</span>`;
 }
@@ -1208,84 +1304,36 @@ function filterApprTable(q) {
 
 
 function renderDashboard(){
-  if(ACT_LOAD) return`<div class="empty-state"><div class="ei">⏳</div><p>Loading…</p></div>`;
-  const today = new Date().toISOString().slice(0,10);
-  // Active = open or assigned (not completed/cancelled), show regardless of date
-  const active = ALL_ACTS.filter(a => a.status==='open' || a.status==='assigned');
-  // Group by assigned agent
-  const byAgent = {};
-  active.forEach(a => {
-    const key = a.assigned_to_name || '— Unassigned —';
-    if(!byAgent[key]) byAgent[key] = [];
-    byAgent[key].push(a);
-  });
-  const agentKeys = Object.keys(byAgent).sort((a,b)=> a==='— Unassigned —'?1:b==='— Unassigned —'?-1:a.localeCompare(b));
-  function ageDays(from){
-    if(!from) return '';
-    const d=(Date.now()-new Date(from))/86400000;
-    return d<1?(Math.round(d*24*10)/10)+' hrs':(Math.round(d*10)/10)+' days';
-  }
+  if(ACT_LOAD)return`<div class="empty-state"><div class="ei">⏳</div><p>Loading…</p></div>`;
+  const today=new Date().toISOString().slice(0,10);
+  const active=ALL_ACTS.filter(a=>a.assigned_to&&(a.status==='assigned'||a.status==='open'));
+  const isCoordinator=AUTH&&AUTH.isCoordinator;
   return`<div>
-<div class="page-hdr">
-  <div><div class="page-title">📊 Today's Dashboard</div>
-  <div class="page-sub">Active activities by agent — persists until closed</div></div>
-  <button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button>
-</div>
-
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:24px">
-  <div class="card" style="padding:16px;text-align:center">
-    <div style="font-size:28px;font-weight:800;color:var(--accent)">${active.length}</div>
-    <div style="font-size:12px;color:var(--muted);margin-top:4px">Total Active</div>
-  </div>
-  <div class="card" style="padding:16px;text-align:center">
-    <div style="font-size:28px;font-weight:800;color:var(--warn)">${active.filter(a=>a.status==='open').length}</div>
-    <div style="font-size:12px;color:var(--muted);margin-top:4px">Unassigned</div>
-  </div>
-  <div class="card" style="padding:16px;text-align:center">
-    <div style="font-size:28px;font-weight:800;color:var(--purple)">${active.filter(a=>a.status==='assigned').length}</div>
-    <div style="font-size:12px;color:var(--muted);margin-top:4px">Assigned</div>
-  </div>
-  <div class="card" style="padding:16px;text-align:center">
-    <div style="font-size:28px;font-weight:800;color:var(--success)">${ALL_ACTS.filter(a=>a.status==='completed'&&a.completed_at&&a.completed_at.slice(0,10)===today).length}</div>
-    <div style="font-size:12px;color:var(--muted);margin-top:4px">Completed Today</div>
-  </div>
-</div>
-
-${!active.length ? `<div class="empty-state"><div class="ei">✅</div><p>No active activities. All caught up!</p></div>` :
-agentKeys.map(agent => {
-  const acts = byAgent[agent];
-  const isUnassigned = agent === '— Unassigned —';
-  return`<div class="card" style="margin-bottom:16px">
-<div class="card-header" style="background:${isUnassigned?'#FFFBEB':'#F8FAFC'}">
-  <div style="display:flex;align-items:center;gap:10px">
-    <div style="width:34px;height:34px;border-radius:50%;background:${isUnassigned?'var(--warn)':'var(--accent)'};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0">
-      ${isUnassigned?'?':agent.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase()}
-    </div>
-    <div>
-      <div style="font-weight:700;font-size:14px">${escH(agent)}</div>
-      <div style="font-size:12px;color:var(--muted)">${acts.length} active activit${acts.length===1?'y':'ies'}</div>
-    </div>
-  </div>
-</div>
-<table class="data-table">
-<thead><tr><th>Type</th><th>Title</th><th>Region</th><th>POC</th><th>Priority</th><th>Age</th><th>Status</th><th>Log</th><th>Rpt</th><th></th></tr></thead>
-<tbody>
-${acts.map((a,i)=>{
-  const t=actTypeLabel(a.type);
-  return`<tr>
+<div class="page-hdr"><div><div class="page-title">📊 Today's Dashboard</div>
+<div class="page-sub">Active assigned activities · ${active.length} total</div></div>
+<button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button></div>
+${!active.length?`<div class="empty-state"><div class="ei">✅</div><p>No active assigned activities.</p></div>`:`
+<div class="card"><div style="overflow-x:auto"><table class="data-table">
+<thead><tr>
+  <th>Type</th><th>Title</th><th>Region</th><th>Site</th>
+  <th>Priority</th><th>Status</th><th>Assigned To</th>
+  <th>CMPAK POC</th><th>Created</th><th></th>
+</tr></thead>
+<tbody>${active.map((a,i)=>{const t=actTypeLabel(a.type);const idx=ALL_ACTS.indexOf(a);return`<tr>
 <td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
-<td><b>${escH(a.title||'—')}</b>${a.site_id?`<div style="font-size:11px;color:var(--muted);font-family:monospace">${escH(a.site_id)}</div>`:''}</td>
-<td style="font-size:12px">${escH(a.region||'—')}</td>
-<td style="font-size:12px;color:var(--muted)">${escH(a.poc_name||'—')}</td>
+<td><b>${escH(a.title||'—')}</b></td>
+<td style="font-size:12px;color:var(--muted)">${escH(a.region||'—')}</td>
+<td style="font-family:var(--mono);font-size:12px">${escH(a.site_id||'—')}</td>
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
-<td style="font-size:12px;color:var(--warn);font-weight:600">${ageDays(a.created_at)}</td>
 <td>${statusBadge(a.status||'open')}</td>
-<td>${a.log_file_url?'<span style="color:var(--success);font-size:11px;font-weight:600">✓ Log</span>':'<span style="color:var(--warn);font-size:11px">⏳ Log</span>'}</td>
-<td>${a.final_report_url?'<span style="color:var(--success);font-size:11px;font-weight:600">✓ Rpt</span>':'<span style="color:var(--warn);font-size:11px">⏳ Rpt</span>'}</td>
-<td><button class="btn btn-outline btn-sm" onclick="openActDetail(${ALL_ACTS.indexOf(a)},'all')">View</button></td>
-</tr>`;}).join('')}
-</tbody></table></div>`;
-}).join('')}
+<td style="font-size:12px;color:var(--muted)">${escH(a.assigned_to_name||'Unassigned')}</td>
+<td style="font-size:12px;color:var(--muted)">${escH(a.poc_name||'—')}</td>
+<td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
+<td style="white-space:nowrap">
+  <button class="btn btn-outline btn-sm" onclick="openActDetail(${idx},'all')">View</button>
+  ${isCoordinator?`<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="openEditActivityModal('${a.id}')">✏ Edit</button>`:''}
+</td>
+</tr>`;}).join('')}</tbody></table></div></div>`}
 </div>`;
 }
 
@@ -1366,7 +1414,10 @@ function renderAllActivities(){
   const filtered=ALL_ACTS;
   return`<div>
 <div class="page-hdr"><div><div class="page-title">All Activities</div><div class="page-sub">Activities across all team members</div></div>
-<button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button></div>
+<div style="display:flex;gap:8px">
+<button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button>
+<button class="btn btn-outline btn-sm" onclick="exportActivitiesCSV()">⤓ CSV Export</button>
+</div></div>
 <div class="form-group" style="margin-bottom:16px">
   <input id="act-search-inp" type="text" placeholder="🔍  Search by title, region, type, agent, POC…" 
     style="max-width:480px"
@@ -1397,7 +1448,7 @@ ${!filtered.length?`<div class="empty-state"><div class="ei">📋</div><p>No act
 <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
 <td style="display:flex;gap:4px;flex-wrap:wrap">
 <button class="btn btn-outline btn-sm" onclick="openActDetail(${idx},'all')">View</button>
-${AUTH.isCoordinator&&(a.status==='completed')?`<button class="btn btn-warn btn-sm" onclick="reopenActivity('${a.id}')">↺ Reopen</button>`:''}
+${AUTH&&AUTH.isCoordinator?`<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="openEditActivityModal('${a.id}')">✏ Edit</button>`:''}
 </td>
 </tr>`;}).join('')}</tbody></table></div>`}
 </div>`;}
@@ -1417,13 +1468,116 @@ ${!unassigned.length?`<div class="empty-state"><div class="ei">✅</div><p>All a
 <td style="font-size:12px;color:var(--muted)">${escH(a.created_by_name||'—')}</td>
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
 <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
-<td><button class="btn btn-primary btn-sm" onclick="openAssignModal('${a.id}')">👤 Assign</button></td>
+<td><button class="btn btn-primary btn-sm" onclick="openAssignModal('${a.id}')">👤 Assign</button>
+${isCoordinator&&a.assigned_to?`<button class="btn btn-outline btn-sm" style="font-size:11px;margin-left:4px" onclick="openReassignModal('${a.id}')">↺ Re-Assign</button>`:''}
+</td>
 </tr>`;}).join('')}</tbody></table></div>`}
 </div>`;}
 
 // ════════════════════════════════════════════════════════════════
 // MODAL
 // ════════════════════════════════════════════════════════════════
+function openEditActivityModal(actId){
+  const a=ALL_ACTS.find(x=>x.id===actId);
+  if(!a)return;
+  MODAL={type:'edit_activity',act:a};renderModal();
+}
+async function saveActivityEdits(actId){
+  const typeEl=document.getElementById('ea-type');
+  const titleEl=document.getElementById('ea-title');
+  const descEl=document.getElementById('ea-desc');
+  const siteEl=document.getElementById('ea-site');
+  const regionEl=document.getElementById('ea-region');
+  const prioEl=document.getElementById('ea-priority');
+  const pocEl=document.getElementById('ea-poc');
+  const assignEl=document.getElementById('ea-assign');
+  const statusEl=document.getElementById('ea-status');
+  const agent=AGENTS.find(x=>x.uid===assignEl?.value);
+  const pocUser=CMPAK_USERS.find(x=>x.uid===pocEl?.value);
+  const updates={
+    type:typeEl?.value||undefined,
+    title:titleEl?.value||undefined,
+    description:descEl?.value||undefined,
+    site_id:siteEl?.value||undefined,
+    region:regionEl?.value||undefined,
+    priority:prioEl?.value||undefined,
+    poc_uid:pocEl?.value||null,
+    poc_name:pocUser?pocUser.name:null,
+    assigned_to:assignEl?.value||null,
+    assigned_to_name:agent?agent.name:null,
+    status:statusEl?.value||undefined,
+    assigned_at:assignEl?.value?new Date().toISOString():undefined
+  };
+  // Remove undefined
+  Object.keys(updates).forEach(k=>updates[k]===undefined&&delete updates[k]);
+  const ok=await DB.patch('activities',actId,updates);
+  if(ok){closeModal();loadActivities();}else alert('Save failed.');
+}
+async function cancelActivity(actId){
+  const REASONS=['POC Not Available','Access Not Available','Site Under Maintenance','Weather Conditions','Duplicate Activity','Other'];
+  const root=document.createElement('div');
+  root.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  root.innerHTML='<div style="background:var(--surface);border-radius:12px;padding:24px;width:380px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.2)">'
+    +'<div style="font-size:15px;font-weight:700;margin-bottom:16px">Cancel / On Hold</div>'
+    +REASONS.map(function(r,i){return '<label style="display:block;padding:8px 10px;border:1px solid var(--border);border-radius:7px;cursor:pointer;margin-bottom:5px;font-size:13px">'
+      +'<input type="radio" name="cr" value="'+escH(r)+'" '+(i===0?'checked':'')+'/> '+escH(r)+'</label>';}).join('')
+    +'<label style="display:block;padding:8px 10px;border:1px solid var(--border);border-radius:7px;cursor:pointer;margin-bottom:5px;font-size:13px">'
+    +'<input type="radio" name="cr" value="onhold"/> ⏸ Put On Hold</label>'
+    +'<textarea id="cr-custom" placeholder="Custom reason..." style="width:100%;margin-top:4px;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:12px;display:none;resize:none;height:60px"></textarea>'
+    +'<div style="display:flex;gap:8px;margin-top:16px"><button id="cr-ok" class="btn btn-danger btn-sm" style="flex:1">Confirm</button><button id="cr-no" class="btn btn-outline btn-sm">Keep</button></div></div>';
+  document.body.appendChild(root);
+  root.querySelector('#cr-no').onclick=function(){root.remove();};
+  root.querySelectorAll('input[name=cr]').forEach(function(r){r.onchange=function(){root.querySelector('#cr-custom').style.display=(r.value==='Other')?'block':'none';};});
+  root.querySelector('#cr-ok').onclick=async function(){
+    const sel=root.querySelector('input[name=cr]:checked');
+    const val=sel?sel.value:'Other';
+    let reason=val==='Other'?(root.querySelector('#cr-custom').value.trim()||'Cancelled'):val;
+    const newStatus=val==='onhold'?'onhold':'cancelled';
+    root.remove();
+    const ok=await DB.patch('activities',actId,{status:newStatus,cancelled_at:new Date().toISOString(),cancellation_reason:reason});
+    if(ok){closeModal();loadActivities();}else alert('Failed.');
+  };
+}
+async function reassignActivity(actId){
+  const a=ALL_ACTS.find(x=>x.id===actId);
+  if(!a){alert('Activity not found.');return;}
+  if(!AGENTS.length){alert('No LCC agents loaded.');return;}
+  const agentOpts=AGENTS.map(function(ag){return'<option value="'+ag.uid+'">'+escH(ag.name||ag.email)+'</option>';}).join('');
+  const root=document.createElement('div');
+  root.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  root.innerHTML='<div style="background:var(--surface);border-radius:12px;padding:24px;width:360px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.2)">'
+    +'<div style="font-size:15px;font-weight:700;margin-bottom:4px">↺ Re-Assign Activity</div>'
+    +'<div style="font-size:12px;color:var(--muted);margin-bottom:14px">Creates a new entry referencing original</div>'
+    +'<select id="ra-agent" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:13px;margin-bottom:16px"><option value="">— Select Agent —</option>'+agentOpts+'</select>'
+    +'<div style="display:flex;gap:8px"><button id="ra-ok" class="btn btn-primary btn-sm" style="flex:1">↺ Re-Assign</button><button id="ra-no" class="btn btn-outline btn-sm">Cancel</button></div></div>';
+  document.body.appendChild(root);
+  root.querySelector('#ra-no').onclick=function(){root.remove();};
+  root.querySelector('#ra-ok').onclick=async function(){
+    const agentUid=root.querySelector('#ra-agent').value;
+    if(!agentUid){alert('Select an agent.');return;}
+    const agent=AGENTS.find(x=>x.uid===agentUid);
+    root.remove();
+    const newId=crypto.randomUUID();
+    const ok=await DB.post('activities',{
+      id:newId,type:a.type,title:a.title,description:a.description,
+      site_id:a.site_id,region:a.region,priority:a.priority,
+      poc_uid:a.poc_uid,poc_name:a.poc_name,
+      complaint_lat:a.complaint_lat,complaint_lng:a.complaint_lng,
+      complaint_poc:a.complaint_poc,instructions_team:a.instructions_team,
+      status:'assigned',created_by:a.created_by,created_by_name:a.created_by_name,
+      company:a.company,created_at:a.created_at,
+      assigned_to:agentUid,assigned_to_name:agent?agent.name:agentUid,
+      assigned_at:new Date().toISOString(),parent_activity_id:actId,
+      completed_at:null,completion_remarks:null,
+      log_file_url:null,log_file_name:null,log_received_at:null,
+      final_report_url:null,final_report_name:null,final_report_at:null
+    });
+    if(ok){
+      await DB.patch('activities',actId,{status:'reassigned',reassigned_to:agentUid,reassigned_at:new Date().toISOString()});
+      loadActivities();
+    } else alert('Re-assignment failed.');
+  };
+}
 function closeModal(){MODAL=null;document.getElementById('modal-root').innerHTML='';}
 
 function openPhotoZoom(url) {
@@ -1453,6 +1607,26 @@ function filterActTable(q) {
     const text = row.textContent.toLowerCase();
     row.style.display = !ql || text.includes(ql) ? '' : 'none';
   });
+}
+
+async function cancelActivity(id){
+  const REASONS=['POC Not Available','Access Not Available','Site Under Maintenance','Weather Conditions','Duplicate Activity','Other'];
+  const root=document.createElement('div');
+  root.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  root.innerHTML='<div style="background:var(--surface);border-radius:12px;padding:24px;width:380px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.2)"><div style="font-size:15px;font-weight:700;margin-bottom:4px">Cancel Activity</div><div style="font-size:12px;color:var(--muted);margin-bottom:16px">Select reason for cancellation</div>'
+    +REASONS.map(function(r,i){return '<label style="display:block;padding:8px 10px;border:1px solid var(--border);border-radius:7px;cursor:pointer;margin-bottom:5px;font-size:13px"><input type=\"radio\" name=\"cr\" value=\"'+escH(r)+'\" '+(i===0?'checked':'')+'/> '+escH(r)+'</label>';}).join('')
+    +'<textarea id=\"cr-custom\" placeholder=\"Describe reason...\" style=\"width:100%;margin-top:4px;padding:8px;border:1px solid var(--border);border-radius:7px;font-size:12px;display:none;resize:none;height:60px\"></textarea><div style=\"display:flex;gap:8px;margin-top:16px\"><button id=\"cr-ok\" class=\"btn btn-danger btn-sm\" style=\"flex:1\">Cancel Activity</button><button id=\"cr-no\" class=\"btn btn-outline btn-sm\">Keep</button></div></div>';
+  document.body.appendChild(root);
+  root.querySelector('#cr-no').onclick=function(){root.remove();};
+  root.querySelectorAll('input[name=cr]').forEach(function(r){r.onchange=function(){root.querySelector('#cr-custom').style.display=r.value==='Other'?'block':'none';};});
+  root.querySelector('#cr-ok').onclick=async function(){
+    var sel=root.querySelector('input[name=cr]:checked');
+    var reason=sel?sel.value:'Other';
+    if(reason==='Other'){var cv=root.querySelector('#cr-custom').value.trim();reason=cv||'Cancelled';}
+    root.remove();
+    var ok=await DB.patch('activities',id,{status:'cancelled',cancelled_at:new Date().toISOString(),cancellation_reason:reason});
+    if(ok){closeModal();loadActivities();}else alert('Failed to cancel.');
+  };
 }
 
 async function reopenActivity(id) {
@@ -1552,6 +1726,41 @@ ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Ed
 </div></div></div>`; return;
   }
 
+  if(m.type==='edit_activity'){
+    const a=m.act;
+    const agentOpts=AGENTS.map(ag=>`<option value="${ag.uid}" ${a.assigned_to===ag.uid?'selected':''}>${escH(ag.name||ag.email)}</option>`).join('');
+    const pocOpts=CMPAK_USERS.map(u=>`<option value="${u.uid}" ${a.poc_uid===u.uid?'selected':''}>${escH(u.name||u.email)}</option>`).join('');
+    const typeOpts=ACT_TYPES.map(t=>`<option value="${t.id}" ${a.type===t.id?'selected':''}>${t.icon} ${t.label}</option>`).join('');
+    const statOpts=['open','assigned','completed','cancelled','onhold','reassigned'].map(s=>`<option value="${s}" ${a.status===s?'selected':''}>${s}</option>`).join('');
+    const regionOpts=(typeof REGIONS!=='undefined'?REGIONS:[]).map(r=>`<option value="${r}" ${a.region===r?'selected':''}>${r}</option>`).join('');
+    mc.innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:560px">
+<div class="modal-hdr"><h3>✏ Edit Activity</h3><button class="btn-x" onclick="closeModal()">✕</button></div>
+<div class="modal-body">
+<div class="form-group"><label>Type</label><select id="ea-type">${typeOpts}</select></div>
+<div class="form-group"><label>Title / Email Subject</label><input id="ea-title" type="text" value="${escH(a.title||'')}"/></div>
+<div class="form-group"><label>Description</label><textarea id="ea-desc" style="min-height:70px">${escH(a.description||'')}</textarea></div>
+<div class="form-row">
+<div class="form-group"><label>Site ID</label><input id="ea-site" type="text" value="${escH(a.site_id||'')}"/></div>
+<div class="form-group"><label>Region</label><select id="ea-region"><option value="">— Select —</option>${regionOpts}</select></div>
+</div>
+<div class="form-row">
+<div class="form-group"><label>Priority</label><select id="ea-priority">${['Low','Medium','High','Critical'].map(p=>`<option ${a.priority===p?'selected':''}>${p}</option>`).join('')}</select></div>
+<div class="form-group"><label>Status</label><select id="ea-status">${statOpts}</select></div>
+</div>
+<div class="form-row">
+<div class="form-group"><label>Assign To (LCC)</label><select id="ea-assign"><option value="">— Unassigned —</option>${agentOpts}</select></div>
+<div class="form-group"><label>CMPAK POC</label><select id="ea-poc"><option value="">— None —</option>${pocOpts}</select></div>
+</div>
+${a.parent_activity_id?`<div style="font-size:12px;color:var(--muted);padding:8px;background:var(--bg);border-radius:7px;margin-top:4px">↺ Re-assigned from: <code>${escH(a.parent_activity_id)}</code></div>`:''}
+</div>
+<div class="modal-ftr">
+<button class="btn btn-danger btn-sm" onclick="cancelActivity('${a.id}')">✕ Cancel/Hold</button>
+<button class="btn btn-outline btn-sm" onclick="reassignActivity('${a.id}')">↺ Re-Assign</button>
+<button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+<button class="btn btn-primary" onclick="saveActivityEdits('${a.id}')">💾 Save Changes</button>
+</div></div></div>`; return;
+  }
+
   if(m.type==='act_detail'){
     const a=m.act;
     const t=actTypeLabel(a.type);
@@ -1578,6 +1787,10 @@ ${a.site_id?`<div class="detail-field"><div class="dk">Site ID</div><div class="
 ${a.region?`<div class="detail-field"><div class="dk">Region</div><div class="dv">${escH(a.region)}</div></div>`:''}
 </div>`:''}
 ${a.description?`<div style="margin-top:10px"><div class="dk">Description</div><div style="font-size:13px;margin-top:4px;line-height:1.5">${escH(a.description)}</div></div>`:''}
+${a.cancellation_reason?`<div style="margin-top:8px;padding:8px 10px;background:#FEF2F2;border-radius:7px;border:1px solid #FECACA"><div style="font-size:11px;font-weight:700;color:#DC2626;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Cancellation / Hold Reason</div><div style="font-size:13px;color:#DC2626">${escH(a.cancellation_reason)}</div></div>`:''}
+${a.parent_activity_id?`<div style="margin-top:8px"><div class="dk">Re-assigned from</div><div style="font-size:12px;color:var(--muted);font-family:monospace;margin-top:2px">${escH(a.parent_activity_id)}</div></div>`:''}
+${a.cancellation_reason?`<div style="margin-top:8px;padding:8px 10px;background:#FEF2F2;border-radius:7px;border:1px solid #FECACA"><div style="font-size:11px;font-weight:700;color:#DC2626;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Cancellation Reason</div><div style="font-size:13px;color:#DC2626">${escH(a.cancellation_reason)}</div></div>`:''}
+${a.parent_activity_id?`<div style="margin-top:8px"><div class="dk">Re-assigned from</div><div style="font-size:12px;color:var(--muted);font-family:monospace;margin-top:2px">${escH(a.parent_activity_id)}</div></div>`:''}
 ${(a.complaint_lat||a.complaint_lng)?`<div style="margin-top:8px"><div class="dk">Complaint Location</div><div style="font-size:13px;margin-top:3px;font-family:var(--mono)">${escH(a.complaint_lat||'')} , ${escH(a.complaint_lng||'')}</div></div>`:''}
 ${a.complaint_poc?`<div style="margin-top:8px"><div class="dk">Complaint POC</div><div style="font-size:13px;margin-top:3px">${escH(a.complaint_poc)}</div></div>`:''}
 ${a.instructions_team?`<div style="margin-top:8px"><div class="dk">Instructions Team</div><div style="font-size:13px;margin-top:3px">${escH(a.instructions_team)}</div></div>`:''}
@@ -2006,14 +2219,42 @@ async function lmLoadRoutes(){
   // Only LCC agents
   let uids=agentUid?[agentUid]:_lmMembers.map(m=>m.uid);
   if(!uids.length){alert('No LCC agents found.');return;}
+
+  // ── Progress bar ───────────────────────────────────────────────────
+  const loadBtn=document.querySelector('#lm-sidebar button[onclick="lmLoadRoutes()"]');
+  if(loadBtn){loadBtn.disabled=true;loadBtn.innerHTML='Loading…';}
+  // Create/reset progress bar
+  let pbWrap=document.getElementById('lm-route-progress');
+  if(!pbWrap){
+    pbWrap=document.createElement('div');
+    pbWrap.id='lm-route-progress';
+    pbWrap.style.cssText='margin-top:8px;';
+    const btnRow=loadBtn?.parentElement;
+    if(btnRow)btnRow.insertAdjacentElement('afterend',pbWrap);
+  }
+  pbWrap.innerHTML='<div style="font-size:11px;color:var(--muted);margin-bottom:4px" id="lm-route-status">Preparing…</div>'
+    +'<div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">'
+    +'<div id="lm-route-bar" style="height:100%;background:var(--accent);border-radius:3px;width:0%;transition:width .3s ease"></div></div>';
+  const setProgress=(done,total,label)=>{
+    const pct=total>0?Math.round(done/total*100):0;
+    const bar=document.getElementById('lm-route-bar');
+    const status=document.getElementById('lm-route-status');
+    if(bar)bar.style.width=pct+'%';
+    if(status)status.textContent=label||`Loading ${done} / ${total} agents…`;
+  };
+  // ──────────────────────────────────────────────────────────────────
+
   try{
-    for(const uid of uids){
+    let totalPts=0;
+    for(let i=0;i<uids.length;i++){
+      const uid=uids[i];
+      const mbr=_lmMembers.find(x=>x.uid===uid);
+      setProgress(i,uids.length,`Loading ${mbr?.name||uid} (${i+1}/${uids.length})…`);
       const pts=await DB.get('/rest/v1/route_points?date=eq.'+date+'&uid=eq.'+uid+'&order=timestamp.asc&select=lat,lng,timestamp&limit=5000');
       const valid=pts.filter(p=>p.lat&&p.lng);
       if(!valid.length)continue;
       const color=lmColor(uid);
-      const m=_lmMembers.find(x=>x.uid===uid);
-      const name=m?.name||uid;
+      const name=mbr?.name||uid;
       valid.forEach((p,i)=>{
         const isFirst=i===0,isLast=i===valid.length-1;
         const dot=L.circleMarker([parseFloat(p.lat),parseFloat(p.lng)],{
@@ -2040,6 +2281,16 @@ async function lmLoadRoutes(){
       try{ const g=L.featureGroup(_lmRoutes.filter(l=>l.getLatLng)); _lm.fitBounds(g.getBounds(),{padding:[50,50]}); }catch(e){}
     }
   }catch(e){ alert('Failed to load routes: '+e.message); }
+  finally{
+    const lb=document.querySelector('#lm-sidebar .btn-primary');
+    if(lb&&lb.textContent.includes('Loading')){lb.disabled=false;lb.innerHTML='Load Routes';}
+    const bar=document.getElementById('lm-route-bar');
+    const status=document.getElementById('lm-route-status');
+    const ptCount=_lmRoutes.filter(function(l){return l.getLatLng;}).length;
+    if(bar){bar.style.width='100%';bar.style.background=ptCount>0?'var(--success)':'var(--danger)';}
+    if(status)status.textContent=ptCount>0?('✓ '+ptCount+' route points loaded'):'No route points found for this date';
+    setTimeout(function(){const pb=document.getElementById('lm-route-progress');if(pb)pb.innerHTML='';},3500);
+  }
 }
 
 function lmClearRoutes(){
