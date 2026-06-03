@@ -176,9 +176,29 @@ textarea{resize:vertical;min-height:80px;}
 #live-map-pane .ctrl-label{font-size:11px;font-weight:600;color:var(--muted);}
 #live-map-pane .ctrl-input{width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);font-size:12px;color:var(--text);outline:none;transition:border-color .15s;}
 #live-map-pane .ctrl-input:focus{border-color:var(--accent);}
-#live-map-pane .filter-pills{display:flex;flex-wrap:wrap;gap:4px;}
-#live-map-pane .pill{padding:3px 9px;border:1px solid var(--border);border-radius:20px;font-size:10px;font-weight:700;color:var(--muted);background:transparent;cursor:pointer;transition:all .12s;}
-#live-map-pane .pill.on{background:#EFF6FF;border-color:var(--accent);color:var(--accent);}
+#live-map-pane .filter-pills{display:flex;flex-wrap:wrap;gap:6px;}
+.pill{
+  padding:5px 14px;
+  border:1.5px solid var(--border);
+  border-radius:20px;
+  font-size:11px;
+  font-weight:700;
+  color:var(--muted);
+  background:#fff;
+  cursor:pointer;
+  transition:all .15s;
+  white-space:nowrap;
+  letter-spacing:.2px;
+}
+.pill:hover{border-color:var(--accent);color:var(--accent);background:#EFF6FF;}
+.pill.on{
+  background:var(--accent);
+  border-color:var(--accent);
+  color:#fff;
+  box-shadow:0 2px 8px rgba(37,99,235,.25);
+}
+#live-map-pane .pill{padding:3px 10px;font-size:10px;}
+#live-map-pane .pill.on{background:var(--accent);border-color:var(--accent);color:#fff;}
 #live-map-pane .member-item{display:flex;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer;transition:all .12s;}
 #live-map-pane .member-item:last-child{border-bottom:none;}
 #live-map-pane .member-item:hover{opacity:.8;}
@@ -311,6 +331,32 @@ textarea{resize:vertical;min-height:80px;}
 .live-badge{background:#16A34A;color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:99px;animation:pulse 2s infinite;}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.6;}}
 
+
+/* ── Attendance Tab ────────────────────────────────────────────────────────── */
+.att-layout{display:flex;flex-direction:column;gap:0;height:100%;padding:24px 0 0;}
+.att-stat{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px 20px;min-width:120px;}
+.att-stat-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:4px;}
+.att-stat-val{font-size:28px;font-weight:800;color:var(--text);line-height:1;}
+.att-stat-sub{font-size:11px;color:var(--muted);margin-top:3px;}
+.att-controls{display:flex;align-items:center;gap:10px;padding:0 0 16px;}
+.att-body{flex:1;display:flex;flex-direction:column;gap:0;overflow:hidden;}
+.att-toolbar{display:flex;align-items:center;gap:10px;padding:10px 0;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:0;}
+.att-table-wrap{flex:1;overflow-y:auto;}
+.att-table-wrap table{width:100%;border-collapse:collapse;font-size:13px;}
+.att-table-wrap thead tr{background:var(--bg);border-bottom:2px solid var(--border);}
+.att-table-wrap th{padding:10px 12px;text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;cursor:pointer;white-space:nowrap;}
+.att-table-wrap th:hover{color:var(--text);}
+.att-table-wrap td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.att-table-wrap tr:hover td{background:#F9FAFB;}
+.att-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;color:var(--muted);gap:8px;}
+.person-gauge{height:3px;background:var(--border);border-radius:2px;margin-top:3px;width:80px;}
+.person-gauge-fill{height:100%;background:var(--primary);border-radius:2px;}
+.badge-green{background:#D1FAE5;color:#065F46;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;}
+.badge-amber{background:#FEF3C7;color:#92400E;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;}
+.badge-red{background:#FEE2E2;color:#991B1B;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;}
+.badge-blue{background:#DBEAFE;color:#1E40AF;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;}
+.mono{font-family:'IBM Plex Mono',monospace;font-size:12px;}
+
 </style>
 </head>
 <body>
@@ -352,6 +398,7 @@ textarea{resize:vertical;min-height:80px;}
         <button class="mod-btn active" id="mod-activity" onclick="switchModule('activity')">📌 Activities</button>
         <button class="mod-btn" id="mod-audit" onclick="switchModule('audit')">📋 Site Audit</button>
         <button class="mod-btn" id="mod-livemap" style="display:none" onclick="switchModule('livemap')">🗺 Live Map</button>
+
       </div>
     </div>
     <div class="topbar-right">
@@ -368,6 +415,14 @@ textarea{resize:vertical;min-height:80px;}
 
       <!-- Left sidebar — identical to VDT -->
       <div class="sidebar" id="lm-sidebar">
+
+        <!-- ── Attendance Button ──────────────────────────── -->
+        <div class="sb-section" style="padding-bottom:8px">
+          <button class="btn btn-outline" style="width:100%;font-size:13px;font-weight:700;padding:10px;border-radius:9px;display:flex;align-items:center;justify-content:center;gap:8px" onclick="openAttPage()">
+            ✅ <span>Attendance</span>
+          </button>
+        </div>
+
         <div class="sb-section">
           <div class="sb-heading">Field Team</div>
           <div class="search-wrap">
@@ -376,15 +431,8 @@ textarea{resize:vertical;min-height:80px;}
           </div>
           <div class="filter-pills" style="margin-bottom:8px">
             <button class="pill on" onclick="lmSetStatusFilter('all',this)">All</button>
-            <button class="pill" onclick="lmSetStatusFilter('active',this)">Active</button>
-            <button class="pill" onclick="lmSetStatusFilter('idle',this)">Idle</button>
-            <button class="pill" onclick="lmSetStatusFilter('checkedout',this)">Out</button>
-          </div>
-          <div class="filter-pills">
-            <button class="pill on" onclick="lmSetRoleFilter('all',this)">All Roles</button>
-            <button class="pill" onclick="lmSetRoleFilter('DT Engineer',this)">DT Eng</button>
-            <button class="pill" onclick="lmSetRoleFilter('Rigger',this)">Rigger</button>
-            <button class="pill" onclick="lmSetRoleFilter('Post Processor',this)">Post</button>
+            <button class="pill" onclick="lmSetStatusFilter('checkedin',this)">Checked In</button>
+            <button class="pill" onclick="lmSetStatusFilter('absent',this)">Absent</button>
           </div>
         </div>
 
@@ -584,6 +632,7 @@ let TECH_DATA={}, SEC_H={};
 let MY_AUDITS=[], HIST_LOAD=false;
 let APPROVER_GRIDS=[], PEND_AUDITS=[], APPR_HISTORY=[], APP_LOAD=false, HIST_APP_LOAD=false, PEND_BADGE=0;
 let ASSIGN_BADGE=0; // count of activities needing assignment
+let attendance = [], attRoleFilter = 'all', attSortBy = 'status';
 let SUBMITTING=false, SUBMIT_ST=null;
 
 // Activity state
@@ -649,8 +698,9 @@ function showApp() {
   document.getElementById('mod-activity').classList.add('active');
   document.getElementById('mod-audit').classList.remove('active');
   showLiveMapTabIfCoordinator();
-  loadSites(); loadAuditHistory(); loadApproverGrids(); loadActivities();
-  render();
+  try{ const ad=document.getElementById('att-date'); if(ad) ad.value=today(); }catch(e){}
+  loadSites(); loadAuditHistory(); loadApproverGrids();
+  ACT_LOAD=true; render(); loadActivities();
   if(window._sessionTimer) clearInterval(window._sessionTimer);
 
   // Auto-poll pending approvals every 60s — badge updates silently in background
@@ -666,7 +716,7 @@ function showApp() {
       if (all.length !== PEND_BADGE) {
         PEND_AUDITS = all; PEND_BADGE = all.length;
         renderSidebar();
-        if (MODULE === 'audit' && A_PAGE === 'approvals') renderPage();
+        if (MODULE === 'audit' && A_PAGE === 'approvals') renderPage(); // already guarded
       }
     } catch(e) { console.warn('[auto-poll approvals]', e); }
   }, 60000);
@@ -828,7 +878,7 @@ async function submitAudit() {
   renderPage();
 }
 async function loadAuditHistory() {
-  HIST_LOAD=true; renderPage();
+  HIST_LOAD=true; if(MODULE==='audit') renderPage();
   if(AUTH.isCoordinator){
     // Ensure AGENTS (LCC users) are loaded — needed for uid-based filtering
     if(!AGENTS.length){
@@ -845,7 +895,7 @@ async function loadAuditHistory() {
   } else {
     MY_AUDITS=await DB.get('/rest/v1/site_audits?submitted_by=eq.'+AUTH.uid+'&order=submitted_at.desc&limit=100');
   }
-  HIST_LOAD=false; renderPage();
+  HIST_LOAD=false; if(MODULE==='audit') renderPage();
 }
 async function loadApproverGrids() {
   try {
@@ -875,9 +925,9 @@ async function loadApprovalHistory() {
 }
 
 async function loadPending() {
-  APP_LOAD=true; renderPage();
+  APP_LOAD=true; if(MODULE==='audit') renderPage();
   if(APPROVER_GRIDS.length === 0) {
-    PEND_AUDITS=[]; PEND_BADGE=0; APP_LOAD=false; renderPage(); renderSidebar();
+    PEND_AUDITS=[]; PEND_BADGE=0; APP_LOAD=false; if(MODULE==='audit'){renderPage();renderSidebar();}
     return;
   }
   // Fetch per grid and merge — avoids complex OR syntax issues
@@ -886,7 +936,7 @@ async function loadPending() {
     const rows = await DB.get('/rest/v1/site_audits?status=eq.pending_approval&grid_id=eq.'+encodeURIComponent(g)+'&order=submitted_at.desc');
     all.push(...rows);
   }
-  PEND_AUDITS=all; PEND_BADGE=all.length; APP_LOAD=false; renderPage(); renderSidebar();
+  PEND_AUDITS=all; PEND_BADGE=all.length; APP_LOAD=false; if(MODULE==='audit'){renderPage();renderSidebar();}
 }
 function resetAuditForm() {
   SEL_SITE=null;IS_CUSTOM=false;SEARCH_Q='';SEARCH_RES=[];
@@ -903,7 +953,7 @@ function restoreSectors(sectors) {
 // ACTIVITY CRUD
 // ════════════════════════════════════════════════════════════════
 async function loadActivities() {
-  ACT_LOAD=true;
+  ACT_LOAD=true; if(MODULE==='activity') renderPage();
   try {
     MY_ACTS      = await DB.get('/rest/v1/activities?created_by=eq.'+AUTH.uid+'&order=created_at.desc&limit=100');
     ALL_ACTS     = await DB.get('/rest/v1/activities?order=created_at.desc&limit=500');
@@ -911,13 +961,15 @@ async function loadActivities() {
     CMPAK_USERS  = await DB.get('/rest/v1/users?company=ilike.*CMPAK*&select=uid,name,email,role&order=name.asc');
   } catch(e) {
     console.error('loadActivities error:', e);
+  } finally {
+    ACT_LOAD=false; if(MODULE==='activity') renderPage();
   }
   // Compute how many open unassigned + rejected activities need coordinator action
   ASSIGN_BADGE = ALL_ACTS.filter(a =>
     (!a.assigned_to && (a.status==='open'||!a.status)) || a.status==='rejected'
   ).length;
-  ACT_LOAD=false; renderPage();
 }
+
 async function submitActivity() {
   if(!ACT_TYPE_SEL){SUBMIT_ST={type:'error',msg:'Please select an activity type.'};renderPage();return;}
   if(!ACT_TITLE.trim()){SUBMIT_ST={type:'error',msg:'Please enter a title.'};renderPage();return;}
@@ -1068,6 +1120,310 @@ async function uploadFile(file, path) {
   } catch(e){ console.error('Upload error:',e); return null; }
 }
 
+// ── VDT compat stubs (used by attendance) ────────────────────────────────────
+function openAttPage(){
+  const el=document.getElementById('att-full-page');
+  if(!el) return;
+  el.style.display='flex';
+  const d=document.getElementById('att-date');
+  d.value=today(); // always reset to today on open
+  setTimeout(loadAttendance,80);
+}
+function closeAttPage(){
+  const el=document.getElementById('att-full-page');
+  if(el) el.style.display='none';
+}
+
+function setLoading(msg){
+  // No-op for OnRoute — modules handle their own loading states inline
+  // Kept as stub so VDT-ported code doesn't throw ReferenceError
+}
+function hideLoading(){
+  // No-op stub
+}
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+// ── Attendance Overlay (full screen over live map) ───────────────────────────
+function openAttendanceOverlay() {
+  // Create overlay inside live-map-pane so it covers the map
+  let ov = document.getElementById('att-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'att-overlay';
+    ov.style.cssText = 'position:absolute;inset:0;background:var(--surface,#fff);z-index:500;display:flex;flex-direction:column;overflow:hidden';
+    const lmp = document.getElementById('live-map-pane');
+    if (lmp) { lmp.style.position='relative'; lmp.appendChild(ov); }
+    else document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  ov.innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--surface);flex-shrink:0">
+      <button onclick="closeAttendanceOverlay()" style="width:32px;height:32px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center">←</button>
+      <div style="font-size:17px;font-weight:800;color:var(--text)">✅ Attendance</div>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <input type="date" id="att-ov-date" class="ctrl-input" style="width:145px" value="${today()}">
+        <button class="btn btn-primary btn-sm" onclick="loadAttendanceOverlay()">Load</button>
+        <button class="btn btn-outline btn-sm" onclick="exportAttOvCSV()">⤓ CSV</button>
+      </div>
+    </div>
+    <div id="att-ov-stats" style="display:flex;gap:12px;flex-wrap:wrap;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0"></div>
+    <div style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap">
+        <input class="ctrl-input" id="att-ov-search" placeholder="⌕ Search member…" style="width:200px;padding:6px 10px" oninput="filterAttOv()">
+        <div class="filter-pills" id="att-ov-role-pills">
+          <button class="pill on" onclick="setAttOvRole('all',this)">All</button>
+        </div>
+        <div style="margin-left:auto;font-size:11px;color:var(--muted)" id="att-ov-date-label"></div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:0 20px 20px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px">
+          <thead>
+            <tr style="background:var(--bg)">
+              <th style="padding:10px 12px;text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border)">Member</th>
+              <th style="padding:10px 12px;text-align:left;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border)">Role</th>
+              <th style="padding:10px 12px;text-align:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border)">Status</th>
+              <th style="padding:10px 12px;text-align:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border)">Check In</th>
+              <th style="padding:10px 12px;text-align:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border)">Check Out</th>
+              <th style="padding:10px 12px;text-align:center;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid var(--border)">Duration</th>
+            </tr>
+          </thead>
+          <tbody id="att-ov-tbody">
+            <tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)">Select date and click Load</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  // Auto-load today
+  loadAttendanceOverlay();
+}
+
+function closeAttendanceOverlay() {
+  const ov = document.getElementById('att-overlay');
+  if (ov) ov.style.display = 'none';
+}
+
+window._attOvRows = [];
+window._attOvRole = 'all';
+
+async function loadAttendanceOverlay() {
+  const dateEl = document.getElementById('att-ov-date');
+  const tbody  = document.getElementById('att-ov-tbody');
+  const date   = dateEl?.value || today();
+  const label  = document.getElementById('att-ov-date-label');
+  if (label) label.textContent = new Date(date+'T12:00').toLocaleDateString('en-PK',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted)"><span class="spinner" style="border-color:rgba(37,99,235,.2);border-top-color:var(--primary)"></span> Loading…</td></tr>';
+  try {
+    const dayStart = date+'T00:00:00Z', dayEnd = date+'T23:59:59Z';
+    const [ciData, coData] = await Promise.all([
+      DB.get('/rest/v1/checkins?timestamp=gte.'+dayStart+'&timestamp=lte.'+dayEnd+'&order=timestamp.asc'),
+      DB.get('/rest/v1/checkouts?timestamp=gte.'+dayStart+'&timestamp=lte.'+dayEnd+'&order=timestamp.asc'),
+    ]);
+    const coMap = {};
+    coData.forEach(co => { if(co.uid) coMap[co.uid] = co.check_out_ms; });
+    const attMap = {};
+    ciData.forEach(ci => {
+      if(!ci.uid) return;
+      const mem = members.find(m=>m.id===ci.uid);
+      const name = mem?(mem.name&&mem.name!==ci.uid?mem.name:mem.email?.split('@')[0]||ci.uid):(ci.name||ci.uid);
+      const role = mem?.role || ci.role || '';
+      if(!attMap[ci.uid]) attMap[ci.uid] = {uid:ci.uid,name,role,checkin:ci.check_in_ms,checkout:coMap[ci.uid]||null};
+    });
+    members.filter(m=>(m.company||'').toUpperCase()==='LCC').forEach(m=>{
+      if(!attMap[m.id]){
+        const name=m.name&&m.name!==m.uid?m.name:m.email?.split('@')[0]||m.id;
+        attMap[m.id]={uid:m.id,name,role:m.role||'',checkin:null,checkout:null};
+      }
+    });
+    window._attOvRows = Object.values(attMap).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    // Update stat cards
+    const rows = window._attOvRows;
+    const present  = rows.filter(r=>r.checkin&&!r.checkout).length;
+    const fullday  = rows.filter(r=>r.checkin&&r.checkout&&(r.checkout-r.checkin)>=8*3600000).length;
+    const half     = rows.filter(r=>r.checkin&&r.checkout&&(r.checkout-r.checkin)<8*3600000).length;
+    const absent   = rows.filter(r=>!r.checkin).length;
+    const rate     = rows.length?Math.round((present+fullday+half)/rows.length*100):0;
+    const statsEl  = document.getElementById('att-ov-stats');
+    if (statsEl) statsEl.innerHTML = [
+      ['Total',rows.length,'var(--primary)'],
+      ['Present',present,'#10B981'],
+      ['Full Day',fullday,'#10B981'],
+      ['Half Day',half,'#F59E0B'],
+      ['Absent',absent,'var(--danger)'],
+      ['Rate',rate+'%','#8B5CF6'],
+    ].map(([l,v,col])=>`<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 16px;min-width:90px;text-align:center"><div style="font-size:22px;font-weight:800;color:${col}">${v}</div><div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px">${l}</div></div>`).join('');
+    // Role pills
+    const roles = [...new Set(rows.map(r=>r.role).filter(Boolean))].sort();
+    const pillsEl = document.getElementById('att-ov-role-pills');
+    if (pillsEl) pillsEl.innerHTML = `<button class="pill ${window._attOvRole==='all'?'on':''}" onclick="setAttOvRole('all',this)">All</button>`
+      + roles.map(r=>`<button class="pill ${window._attOvRole===r?'on':''}" onclick="setAttOvRole('${r}',this)">${r}</button>`).join('');
+    renderAttOvTable();
+  } catch(e) {
+    console.error('[loadAttendanceOverlay]',e);
+    if(tbody) tbody.innerHTML=`<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--danger)">Error: ${e.message}</td></tr>`;
+  }
+}
+
+function setAttOvRole(role, btn) {
+  window._attOvRole = role;
+  document.querySelectorAll('#att-ov-role-pills .pill').forEach(p=>p.classList.remove('on'));
+  if(btn) btn.classList.add('on');
+  renderAttOvTable();
+}
+
+function filterAttOv() { renderAttOvTable(); }
+
+function renderAttOvTable() {
+  const tbody  = document.getElementById('att-ov-tbody'); if(!tbody) return;
+  const search = (document.getElementById('att-ov-search')?.value||'').toLowerCase();
+  const role   = window._attOvRole || 'all';
+  let rows = window._attOvRows || [];
+  if (role !== 'all') rows = rows.filter(r=>r.role===role);
+  if (search) rows = rows.filter(r=>(r.name||'').toLowerCase().includes(search));
+  if (!rows.length) { tbody.innerHTML='<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted)">No records found</td></tr>'; return; }
+  tbody.innerHTML = rows.map(r => {
+    const durH=(r.checkin&&r.checkout)?(r.checkout-r.checkin)/3600000:0;
+    const status=!r.checkin?'Absent':!r.checkout?'Present':durH>=8?'Full Day':'Half Day';
+    const scol={Absent:'#EF4444',Present:'#10B981','Full Day':'#10B981','Half Day':'#F59E0B'}[status];
+    const ci=r.checkin?new Date(r.checkin).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}):'—';
+    const co=r.checkout?new Date(r.checkout).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}):'—';
+    const dur=r.checkin&&r.checkout?(durH).toFixed(1)+'h':'—';
+    const col=getColor?getColor(r.uid):'#6366F1';
+    const ini=(r.name||'?').split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:10px 12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:28px;height:28px;border-radius:50%;background:${col};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;flex-shrink:0">${ini}</div>
+          <div style="font-weight:700;font-size:12px">${escH(r.name)}</div>
+        </div>
+      </td>
+      <td style="padding:10px 12px"><span style="background:#DBEAFE;color:#1E40AF;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700">${escH(r.role||'—')}</span></td>
+      <td style="padding:10px 12px;text-align:center"><span style="font-size:11px;font-weight:700;color:${scol}">${status}</span></td>
+      <td style="padding:10px 12px;text-align:center;font-family:monospace;font-size:12px;color:#10B981">${ci}</td>
+      <td style="padding:10px 12px;text-align:center;font-family:monospace;font-size:12px;color:var(--muted)">${co}</td>
+      <td style="padding:10px 12px;text-align:center;font-family:monospace;font-size:12px;color:var(--primary)">${dur}</td>
+    </tr>`;
+  }).join('');
+}
+
+function exportAttOvCSV() {
+  const rows = window._attOvRows || [];
+  const date = document.getElementById('att-ov-date')?.value || today();
+  if(!rows.length){alert('Load attendance first.');return;}
+  const header='Name,Role,Status,Check In,Check Out,Duration';
+  const lines=rows.map(r=>{
+    const durH=(r.checkin&&r.checkout)?(r.checkout-r.checkin)/3600000:0;
+    const status=!r.checkin?'Absent':!r.checkout?'Present':durH>=8?'Full Day':'Half Day';
+    const ci=r.checkin?new Date(r.checkin).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}):'';
+    const co=r.checkout?new Date(r.checkout).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}):'';
+    return [r.name,r.role,status,ci,co,durH?durH.toFixed(1)+'h':''].join(',');
+  });
+  const blob=new Blob([[header,...lines].join('\n')],{type:'text/csv'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='attendance_'+date+'.csv';a.click();
+}
+
+// ── Live Map Attendance Panel ─────────────────────────────────────────────────
+async function lmLoadAttendance() {
+  const dateEl = document.getElementById('lm-att-date');
+  const tbody  = document.getElementById('lm-att-tbody');
+  const date   = dateEl?.value || today();
+  if (!dateEl?.value) { dateEl && (dateEl.value = today()); }
+  if (tbody) tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--muted)"><span class="spinner" style="border-color:rgba(37,99,235,.2);border-top-color:var(--primary)"></span></td></tr>';
+  try {
+    const dayStart = date + 'T00:00:00Z';
+    const dayEnd   = date + 'T23:59:59Z';
+    const [ciData, coData] = await Promise.all([
+      DB.get('/rest/v1/checkins?timestamp=gte.' + dayStart + '&timestamp=lte.' + dayEnd + '&order=timestamp.asc'),
+      DB.get('/rest/v1/checkouts?timestamp=gte.' + dayStart + '&timestamp=lte.' + dayEnd + '&order=timestamp.asc'),
+    ]);
+    const coMap = {};
+    coData.forEach(co => { if(co.uid) coMap[co.uid] = co.check_out_ms; });
+    const attMap = {};
+    ciData.forEach(ci => {
+      if(!ci.uid) return;
+      const mem = members.find(m => m.id === ci.uid);
+      const name = mem ? (mem.name && mem.name !== ci.uid ? mem.name : mem.email?.split('@')[0] || ci.uid) : (ci.name || ci.uid);
+      if(!attMap[ci.uid]) attMap[ci.uid] = { uid:ci.uid, name, checkin: ci.check_in_ms, checkout: coMap[ci.uid]||null };
+    });
+    // Add absent LCC members
+    members.filter(m=>(m.company||'').toUpperCase()==='LCC').forEach(m=>{
+      if(!attMap[m.id]){
+        const name = m.name && m.name !== m.uid ? m.name : m.email?.split('@')[0] || m.id;
+        attMap[m.id] = { uid:m.id, name, checkin:null, checkout:null };
+      }
+    });
+    const rows = Object.values(attMap).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    const present  = rows.filter(r=>r.checkin&&!r.checkout).length;
+    const fullday  = rows.filter(r=>r.checkin&&r.checkout&&(r.checkout-r.checkin)>=8*3600000).length;
+    const half     = rows.filter(r=>r.checkin&&r.checkout&&(r.checkout-r.checkin)<8*3600000).length;
+    const absent   = rows.filter(r=>!r.checkin).length;
+    const el_t = document.getElementById('lm-att-total');   if(el_t) el_t.textContent = rows.length;
+    const el_p = document.getElementById('lm-att-present'); if(el_p) el_p.textContent = present + fullday + half;
+    const el_a = document.getElementById('lm-att-absent');  if(el_a) el_a.textContent = absent;
+    // Store for CSV
+    window._lmAttRows = rows; window._lmAttDate = date;
+    if (!tbody) return;
+    if (!rows.length) { tbody.innerHTML='<tr><td colspan="4" style="text-align:center;padding:12px;color:var(--muted)">No records found</td></tr>'; return; }
+    tbody.innerHTML = rows.map(r => {
+      const durH = (r.checkin&&r.checkout)?(r.checkout-r.checkin)/3600000:0;
+      const status = !r.checkin ? 'Absent' : !r.checkout ? 'Present' : durH>=8 ? 'Full Day' : 'Half Day';
+      const color  = status==='Absent'?'#EF4444':status==='Present'?'#10B981':'#F59E0B';
+      const ci = r.checkin ? new Date(r.checkin).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}) : '—';
+      const co = r.checkout ? new Date(r.checkout).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}) : '—';
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:5px 8px;font-weight:600;font-size:11px">${escH(r.name)}</td>
+        <td style="padding:5px 8px;text-align:center;font-family:monospace;font-size:10px;color:#10B981">${ci}</td>
+        <td style="padding:5px 8px;text-align:center;font-family:monospace;font-size:10px;color:var(--muted)">${co}</td>
+        <td style="padding:5px 8px;text-align:center"><span style="font-size:9px;font-weight:700;color:${color}">${status}</span></td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    console.error('[lmLoadAttendance]', e);
+    if(tbody) tbody.innerHTML='<tr><td colspan="4" style="text-align:center;padding:12px;color:var(--danger)">Error: '+e.message+'</td></tr>';
+  }
+}
+
+function exportLmAttCSV() {
+  const rows = window._lmAttRows || [];
+  const date = window._lmAttDate || today();
+  if(!rows.length) { alert('Load attendance first.'); return; }
+  const header = 'Name,Check In,Check Out,Status,Duration';
+  const lines = rows.map(r => {
+    const durH=(r.checkin&&r.checkout)?(r.checkout-r.checkin)/3600000:0;
+    const status=!r.checkin?'Absent':!r.checkout?'Present':durH>=8?'Full Day':'Half Day';
+    const ci=r.checkin?new Date(r.checkin).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}):'';
+    const co=r.checkout?new Date(r.checkout).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}):'';
+    const dur=r.checkin&&r.checkout?durH.toFixed(1)+'h':'';
+    return [r.name,ci,co,status,dur].join(',');
+  });
+  const blob=new Blob([[header,...lines].join('\n')],{type:'text/csv'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='attendance_'+date+'.csv'; a.click();
+}
+
+
+
+// ── Utility functions (needed by attendance + other features) ─────────────────
+function today(){ return new Date().toISOString().slice(0,10); }
+function fmtTime(ms){ if(!ms) return '—'; return new Date(ms).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}); }
+function fmtDur(ci, co){
+  if(!ci) return '—';
+  const end = co || Date.now();
+  const h = Math.floor((end-ci)/3600000);
+  const m = Math.floor(((end-ci)%3600000)/60000);
+  return h+'h '+(m<10?'0':'')+m+'m';
+}
+function getColor(uid){
+  const COLORS=['#6366F1','#F59E0B','#10B981','#EF4444','#3B82F6','#8B5CF6','#EC4899','#14B8A6','#F97316','#06B6D4'];
+  if(!uid) return COLORS[0];
+  let h=0; for(let i=0;i<uid.length;i++) h=(h*31+uid.charCodeAt(i))>>>0;
+  return COLORS[h%COLORS.length];
+}
+function initials(name){
+  if(!name) return '?';
+  const w = name.trim().split(/\s+/);
+  return (w[0][0]+(w[1]?w[1][0]:'')).toUpperCase();
+}
 // ════════════════════════════════════════════════════════════════
 // RENDER
 // ════════════════════════════════════════════════════════════════
@@ -1081,9 +1437,11 @@ function switchModule(m){
     document.getElementById('mod-activity').classList.remove('active');
     document.getElementById('mod-livemap').classList.add('active');
     MODULE='livemap';
-    setTimeout(function(){initLiveMap();if(_lm)_lm.invalidateSize();},150);
+    setTimeout(function(){initLiveMap();if(_lm)_lm.invalidateSize();const d=document.getElementById('lm-att-date');if(d&&!d.value)d.value=today();},150);
     return;
   }
+  // Always dismiss loading overlay when switching modules
+  hideLoading();
   if(lmp)lmp.style.display='none';
   if(main){main.style.display='flex';main.style.flexDirection='row';}
   document.getElementById('mod-audit').classList.toggle('active',m==='audit');
@@ -1094,6 +1452,7 @@ function switchModule(m){
   if(m==='activity'){ AC_PAGE='dashboard'; loadActivities(); }
   if(m==='analytics'){ AN_PAGE='overview'; loadAnalytics(); }
   if(m==='audit') A_PAGE='new';
+
   render();
 }
 
@@ -1107,6 +1466,10 @@ function renderSidebar() {
       ${[{id:'new',icon:'➕',label:'New Audit'},{id:'history',icon:'🕐',label:'My Audits'},{id:'approvals',icon:'✅',label:'Approvals',badge:PEND_BADGE}].map(n=>
         `<button class="nav-item ${A_PAGE===n.id?'active':''}" onclick="auditNav('${n.id}')"><span class="ni">${n.icon}</span>${n.label}${n.badge?`<span class="nav-badge">${n.badge}</span>`:''}</button>`
       ).join('')}`;
+  } else if(MODULE==='attendance'){
+    sidebar.innerHTML=`
+      <div class="sidebar-label">Attendance</div>
+      <button class="nav-item active"><span class="ni">✅</span>Attendance</button>`;
   } else if(MODULE==='analytics'){
     sidebar.innerHTML=`
       <div class="sidebar-label">Analytics</div>
@@ -1131,12 +1494,19 @@ function renderSidebar() {
 function render() {
   renderSidebar();
   const el=document.getElementById('page-content'); if(!el)return;
+  // Always update audit search card visibility regardless of module
+  const _sc=document.getElementById('audit-search-static');
+  if(_sc) _sc.style.display=(MODULE==='audit'&&A_PAGE==='new')?'block':'none';
+  // Never overwrite attendance — it manages its own DOM
+  if(MODULE==='attendance') return;
   if(MODULE==='audit'){
     if(A_PAGE==='new')        el.innerHTML=renderAuditNew();
     else if(A_PAGE==='history')    el.innerHTML=renderAuditHistory();
     else if(A_PAGE==='approvals')  el.innerHTML=renderAuditApprovals();
   } else if(MODULE==='analytics'){
     el.innerHTML=renderAnalytics();
+  } else if(MODULE==='attendance'){
+    el.innerHTML=renderAttendancePage();
   } else {
     if(AC_PAGE==='dashboard')          el.innerHTML=renderDashboard();
     else if(AC_PAGE==='analytics_act')  el.innerHTML=renderAnalyticsFull();
@@ -1146,9 +1516,7 @@ function render() {
     else if(AC_PAGE==='assign')         el.innerHTML=renderAssignActivities();
   }
   renderModal();
-  // Show/hide persistent search card
-  const searchCard = document.getElementById('audit-search-static');
-  if(searchCard) searchCard.style.display = (MODULE==='audit' && A_PAGE==='new') ? 'block' : 'none';
+  // (audit-search-static visibility handled at top of render())
   // Update site count
   const sc = document.getElementById('site-count');
   if(sc) sc.textContent = SSL_LOADED ? SSL_CACHE.length.toLocaleString()+' sites loaded' : '⏳ Loading sites…';
@@ -1173,7 +1541,7 @@ let AN_LOAD = false;
 
 async function loadAnalytics(){
   if(AN_LOAD) return;
-  AN_LOAD=true; render();
+  AN_LOAD=true; if(MODULE==='analytics'||MODULE==='activity') render();
   try {
     // Load all activities for analytics (no limit - use pagination)
     let all=[], offset=0, pageSize=1000;
@@ -1186,7 +1554,7 @@ async function loadAnalytics(){
     }
     AN_DATA = all;
   } catch(e){ console.error('loadAnalytics error:', e); AN_DATA=[]; }
-  AN_LOAD=false; render();
+  AN_LOAD=false; if(MODULE==='analytics'||MODULE==='activity') render();
 }
 
 // helpers
@@ -2068,7 +2436,7 @@ ${canComplete?`
 </div>
 <div class="form-group">
 <label>📁 Log File (optional)</label>
-<input id="log-file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.zip,.txt,.log,.csv,.kml,.kmz" style="padding:6px"/>
+<input id="log-file" type="file" accept="*" style="padding:6px"/>
 <div style="font-size:11px;color:var(--muted);margin-top:4px">Any agent can attach a log file</div>
 </div>
 <button class="btn btn-success" id="btn-complete" onclick="completeActivity('${a.id}')">✅ Mark as Completed</button>
@@ -2080,7 +2448,7 @@ ${AUTH.isCoordinator && a.status==='completed'?`
 ${a.final_report_url?`<div style="font-size:13px;color:var(--success);margin-bottom:10px">✓ Report already submitted: <b>${escH(a.final_report_name||'Report')}</b> at ${fmtDT(a.final_report_at)}</div>`:''}
 <div class="form-group">
 <label>Final Report File <span style="color:var(--danger)">*</span></label>
-<input id="rep-file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.zip" style="padding:6px"/>
+<input id="rep-file" type="file" accept="*" style="padding:6px"/>
 <div style="font-size:11px;color:var(--muted);margin-top:4px">Only Coordinator can submit the final report</div>
 </div>
 <button class="btn btn-primary" id="btn-report" onclick="submitReport('${a.id}')">📄 Submit Report</button>
@@ -2256,7 +2624,11 @@ function lmRenderList(){
   const list=document.getElementById('lm-member-list');
   if(!list)return;
   const filtered=_lmMembers.filter(m=>{
-    if(_lmStatusF!=='all'&&m.status!==_lmStatusF)return false;
+    if(_lmStatusF==='checkedin'){
+      if(m.status!=='active') return false;
+    } else if(_lmStatusF==='absent'){
+      if(m.status==='active') return false;
+    }
     if(_lmRoleF!=='all'&&m.role!==_lmRoleF)return false;
     if(search&&!(m.name||'').toLowerCase().includes(search))return false;
     return true;
@@ -2282,13 +2654,12 @@ function lmRenderList(){
 function lmFilterMembers(){ lmRenderList(); }
 function lmSetStatusFilter(f,btn){
   _lmStatusF=f;
-  document.querySelectorAll('#lm-sidebar .filter-pills:first-of-type .pill').forEach(p=>p.classList.remove('on'));
-  btn.classList.add('on'); lmRenderList();
+  document.querySelectorAll('#lm-sidebar .filter-pills .pill').forEach(p=>p.classList.remove('on'));
+  if(btn) btn.classList.add('on'); lmRenderList();
 }
 function lmSetRoleFilter(f,btn){
   _lmRoleF=f;
-  document.querySelectorAll('#lm-sidebar .filter-pills:last-of-type .pill').forEach(p=>p.classList.remove('on'));
-  btn.classList.add('on'); lmRenderList();
+  lmRenderList();
 }
 
 // ── Map markers — VDT makePin style ──────────────────────────────────
@@ -2627,6 +2998,9 @@ async function tryRefreshToken(refreshToken) {
 }
 
 document.addEventListener('DOMContentLoaded', async function(){
+  // Remove any stale loading overlay that might block clicks
+  const stale=document.getElementById('onroute-loading-overlay');
+  if(stale) stale.remove();
   try {
     const saved = localStorage.getItem('onroute_auth');
     if (!saved) return;
@@ -2829,52 +3203,44 @@ function renderAnalyticsFull(){
       )}
     </div>
 
-    <!-- ── Priority ── -->
-    ${SECTION('Priority Breakdown',
-      `${[['Critical','#DC2626'],['High','#F59E0B'],['Medium','#6366F1'],['Low','#10B981']].map(([p,col])=>{
-          const cnt=data.filter(a=>(a.priority||'Medium')===p).length;
-          const done=data.filter(a=>(a.priority||'Medium')===p&&a.status==='completed').length;
-          const active=cnt-done;
-          const r2=cnt?((done/cnt)*100).toFixed(0):'0';
-          const maxW=Math.max(...[['Critical','#DC2626'],['High','#F59E0B'],['Medium','#6366F1'],['Low','#10B981']].map(([pp])=>data.filter(a=>(a.priority||'Medium')===pp).length),1);
-          const barW=cnt>0?Math.round((cnt/maxW)*100):0;
-          return `<div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid #F3F4F6">
-            <div style="width:72px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${col};flex-shrink:0">${p}</div>
-            <div style="flex:1;position:relative">
-              <div style="height:22px;background:#F3F4F6;border-radius:5px;overflow:hidden">
-                <div style="height:100%;width:${barW}%;background:${col};border-radius:5px;display:flex;align-items:center;padding-left:8px;transition:width .4s">
-                  ${barW>15?`<span style="font-size:11px;font-weight:700;color:#fff">${cnt}</span>`:''}
-                </div>
-              </div>
-              ${barW<=15&&cnt>0?`<span style="position:absolute;left:${barW+1}%;top:3px;font-size:11px;font-weight:700;color:${col}">${cnt}</span>`:''}
-            </div>
-            <div style="width:120px;flex-shrink:0;font-size:11px;color:#6B7280;text-align:right">${done} done · ${active} active · ${r2}%</div>
-          </div>`;
-        }).join('')}`
-    )}
+    <!-- ── Priority + Category side by side ── -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:18px">
 
-    <!-- ── Category Breakdown ── -->
-    ${SECTION('Category Breakdown',
-      `${typeEntries.map(([type,d],i)=>{
-          const pct=d.total>0?((d.completed/d.total)*100).toFixed(0):0;
-          const col=TYPE_COLORS[i%TYPE_COLORS.length];
-          const doneW=d.total>0?Math.round((d.completed/maxType)*100):0;
-          const openW=d.total>0?Math.round((d.open/maxType)*100):0;
-          const name=anTypeName(type);
-          return `<div style="display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid #F3F4F6">
-            <div style="width:170px;flex-shrink:0;font-size:12px;font-weight:600;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
-            <div style="flex:1">
-              <div style="height:22px;background:#F3F4F6;border-radius:5px;overflow:hidden;position:relative">
-                <div style="height:100%;width:${Math.round((d.total/maxType)*100)}%;background:${col};border-radius:5px;display:flex;align-items:center;padding-left:8px">
-                  ${Math.round((d.total/maxType)*100)>12?`<span style="font-size:11px;font-weight:700;color:#fff">${d.total}</span>`:''}
-                </div>
-              </div>
-            </div>
-            <div style="width:38px;text-align:right;font-size:12px;font-weight:700;color:${col};flex-shrink:0">${d.total}</div>
-            <div style="width:130px;flex-shrink:0;font-size:11px;color:#6B7280;text-align:right">${d.completed} done · ${d.open} active · ${pct}%</div>
-          </div>`;
-        }).join('')}`
-    )}
+      ${SECTION('Priority Breakdown',
+        `<div style="display:flex;gap:10px;align-items:flex-end;height:140px;padding:0 4px">
+          ${[['Critical','#DC2626'],['High','#F59E0B'],['Medium','#6366F1'],['Low','#10B981']].map(([p,col])=>{
+            const cnt=data.filter(a=>(a.priority||'Medium')===p).length;
+            const done=data.filter(a=>(a.priority||'Medium')===p&&a.status==='completed').length;
+            const maxW=Math.max(...[['Critical'],['High'],['Medium'],['Low']].map(([pp])=>data.filter(a=>(a.priority||'Medium')===pp).length),1);
+            const barH=cnt>0?Math.round((cnt/maxW)*110):4;
+            const r2=cnt?((done/cnt)*100).toFixed(0):'0';
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
+              <div style="font-size:11px;font-weight:700;color:${col}">${cnt}</div>
+              <div style="width:100%;height:${barH}px;background:${col};border-radius:4px 4px 0 0;min-height:4px;transition:height .4s"></div>
+              <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${col};text-align:center">${p}</div>
+              <div style="font-size:9px;color:#9CA3AF;text-align:center">${r2}%</div>
+            </div>`;
+          }).join('')}
+        </div>`
+      )}
+
+      ${SECTION('Category Breakdown',
+        `<div style="display:flex;gap:6px;align-items:flex-end;height:140px;padding:0 2px;overflow-x:auto">
+          ${typeEntries.map(([type,d],i)=>{
+            const col=TYPE_COLORS[i%TYPE_COLORS.length];
+            const barH=d.total>0?Math.round((d.total/maxType)*110):4;
+            const pct=d.total>0?((d.completed/d.total)*100).toFixed(0):0;
+            const name=anTypeName(type);
+            return `<div style="flex:1;min-width:44px;display:flex;flex-direction:column;align-items:center;gap:4px">
+              <div style="font-size:11px;font-weight:700;color:${col}">${d.total}</div>
+              <div style="width:100%;height:${barH}px;background:${col};border-radius:4px 4px 0 0;min-height:4px;transition:height .4s" title="${name}"></div>
+              <div style="font-size:8px;color:#374151;text-align:center;max-width:56px;line-height:1.2;word-break:break-word" title="${name}">${name.replace(/^[^\s]+ /,'')}</div>
+              <div style="font-size:9px;color:#9CA3AF;text-align:center">${pct}%</div>
+            </div>`;
+          }).join('')}
+        </div>`
+      )}
+    </div>
 
     <!-- ── Team Performance ── -->
     ${SECTION('Team Performance',
@@ -2913,6 +3279,60 @@ function renderAnalyticsFull(){
           }).join('')}
         </div>
       </div>`
+    )}
+
+    <!-- ── Avg Resolution Time Trend ── -->
+    ${SECTION('Avg Resolution Time (Daily)',  
+      `${(()=>{
+        const resMap={};
+        data.filter(a=>a.status==='completed'&&a.created_at&&a.completed_at).forEach(a=>{
+          const d=a.completed_at.slice(0,10);
+          if(!resMap[d])resMap[d]={sum:0,cnt:0};
+          const days=(new Date(a.completed_at)-new Date(a.created_at))/(1000*3600*24);
+          resMap[d].sum+=days; resMap[d].cnt++;
+        });
+        const resMonths=Object.keys(resMap).sort();
+        const resVals=resMonths.map(d=>(resMap[d].sum/resMap[d].cnt));
+        const maxRes=Math.max(...resVals,1);
+        const RW=580, RH=140, PAD=30;
+        if(!resMonths.length) return '<div style="color:#9CA3AF;font-size:13px;padding:20px;text-align:center">No completed activities yet.</div>';
+        const chartW=RW-PAD-10, chartH=RH-20;
+        const xPos=i=>resMonths.length>1?(i/(resMonths.length-1))*chartW+PAD:RW/2;
+        const yPos=i=>chartH-Math.round((resVals[i]/maxRes)*(chartH-20))+10;
+        const pts=resMonths.map((_,i)=>`${xPos(i)},${yPos(i)}`);
+        const dotsSvg=resMonths.map((m,i)=>`
+          <circle cx="${xPos(i)}" cy="${yPos(i)}" r="5" fill="#fff" stroke="#8B5CF6" stroke-width="2"/>
+          <circle cx="${xPos(i)}" cy="${yPos(i)}" r="3" fill="#8B5CF6">
+            <title>${m}: ${resVals[i].toFixed(1)} days</title>
+          </circle>`).join('');
+        // Only show labels for first and last + every nth to avoid clutter
+        const step=Math.max(1,Math.floor(resMonths.length/8));
+        const labels=resMonths.map((m,i)=>{
+          if(i!==0&&i!==resMonths.length-1&&i%step!==0)return '';
+          return `<text x="${xPos(i)}" y="${RH+4}" text-anchor="middle" font-size="8" fill="#9CA3AF">${m.slice(5)}</text>`;
+        }).join('');
+        return `<div style="overflow-x:auto">
+        <svg width="${Math.max(RW,resMonths.length*30)}" height="${RH+20}" style="display:block">
+          ${[0,.25,.5,.75,1].map(f=>{
+            const y=chartH-f*(chartH-20)+10;
+            return `<line x1="${PAD}" y1="${y}" x2="${RW}" y2="${y}" stroke="#F3F4F6" stroke-width="1"/>
+                    <text x="${PAD-4}" y="${y+3}" text-anchor="end" font-size="8" fill="#D1D5DB">${(f*maxRes).toFixed(1)}d</text>`;
+          }).join('')}
+          <defs>
+            <linearGradient id="resArea" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.15"/>
+              <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <polygon points="${pts.join(' ')} ${xPos(resMonths.length-1)},${chartH+10} ${xPos(0)},${chartH+10}" fill="url(#resArea)"/>
+          <polyline points="${pts.join(' ')}" fill="none" stroke="#8B5CF6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+          ${dotsSvg}
+          ${labels}
+        </svg></div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:14px">
+          ${resMonths.slice().reverse().slice(0,10).map((m,i)=>`<div style="text-align:center;min-width:64px"><div style="font-size:10px;color:#6B7280">${m}</div><div style="font-size:14px;font-weight:700;color:#8B5CF6">${resVals[resMonths.length-1-i].toFixed(1)}d</div></div>`).join('')}
+        </div>`;
+      })()}`
     )}
 
     <!-- ── Monthly Timeline ── -->
@@ -3317,6 +3737,331 @@ function renderAnalyticsTimeline(){
     </div>
   </div>`;
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ATTENDANCE TAB — copied from VDT Portal
+// ══════════════════════════════════════════════════════════════════════════════
+function renderAttendancePage() {
+  return `<div class="att-layout">
+    <div style="display:flex;align-items:center;gap:10px;padding-bottom:16px;flex-wrap:wrap">
+      <div style="font-size:18px;font-weight:800;color:var(--text);margin-right:8px">✅ Attendance</div>
+      <label style="font-size:11px;font-weight:600;color:var(--muted)">Date</label>
+      <input type="date" class="ctrl-input" id="att-date" style="width:145px" value="${today()}">
+      <button class="btn btn-primary btn-sm" onclick="loadAttendance()">Load</button>
+      <button class="btn btn-outline btn-sm" onclick="exportAttCSV()">⤓ CSV</button>
+      <div style="margin-left:auto;font-size:11px;color:var(--muted)" id="att-date-label"></div>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px" id="att-dashboard">
+      <div class="att-stat"><div class="att-stat-label">Total Team</div><div class="att-stat-val" style="color:var(--primary)">—</div></div>
+      <div class="att-stat"><div class="att-stat-label">Present</div><div class="att-stat-val" style="color:#10B981">—</div></div>
+      <div class="att-stat"><div class="att-stat-label">Full Day</div><div class="att-stat-val" style="color:#10B981">—</div></div>
+      <div class="att-stat"><div class="att-stat-label">Half Day</div><div class="att-stat-val" style="color:#F59E0B">—</div></div>
+      <div class="att-stat"><div class="att-stat-label">Absent</div><div class="att-stat-val" style="color:var(--danger)">—</div></div>
+      <div class="att-stat"><div class="att-stat-label">Att. Rate</div><div class="att-stat-val" style="color:#8B5CF6">—</div></div>
+    </div>
+    <div class="att-body">
+      <div class="att-toolbar">
+        <input class="ctrl-input" id="att-search" placeholder="⌕  Search member…" style="width:200px;padding:6px 10px" oninput="renderAttTable()">
+        <div class="filter-pills" id="att-role-pills">
+          <button class="pill on" onclick="setAttRoleFilter('all',this)">All</button>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="loadAttendance()" style="margin-left:auto">🔄 Refresh</button>
+        <div style="margin-left:auto;font-size:11px;color:var(--muted);font-family:var(--mono)" id="att-date-label"></div>
+      </div>
+      <div class="att-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th onclick="sortAtt('name')" style="min-width:160px">Member ↕</th>
+              <th onclick="sortAtt('role')">Role</th>
+              <th onclick="sortAtt('status')">Status</th>
+              <th>Check In</th>
+              <th>Check Out</th>
+              <th>Duration</th>
+              <th>Rigger</th>
+              <th style="min-width:140px">Attendance Rate</th>
+            </tr>
+          </thead>
+          <tbody id="att-tbody"></tbody>
+        </table>
+        <div id="att-empty" class="empty-state" style="display:none">
+          <div style="font-size:28px;margin-bottom:4px">📋</div>
+          <div style="font-size:13px;font-weight:600">No attendance records</div>
+          <div style="font-size:11px">Select a date and click Load</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadAttendance() {
+  const dateEl = document.getElementById('att-date');
+  const date   = (dateEl && dateEl.value) ? dateEl.value : today();
+  if(dateEl && !dateEl.value) dateEl.value = date;
+
+  const labelEl = document.getElementById('att-date-label');
+  if(labelEl) labelEl.textContent = new Date(date+'T12:00').toLocaleDateString('en-PK',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  const tb = document.getElementById('att-tbody');
+  if(tb) tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--muted)">⏳ Loading…</td></tr>';
+  const empEl = document.getElementById('att-empty');
+  if(empEl) empEl.style.display = 'none';
+
+  try {
+    // Ensure LCC agents are loaded
+    if(!AGENTS.length) {
+      AGENTS = await DB.get('/rest/v1/users?company=ilike.*LCC*&select=uid,name,email,role&order=name.asc');
+    }
+
+    const dayStart = date + 'T00:00:00Z';
+    const dayEnd   = date + 'T23:59:59Z';
+
+    // Load checkins and checkouts from Supabase
+    const [ciData, coData] = await Promise.all([
+      DB.get('/rest/v1/checkins?timestamp=gte.'+dayStart+'&timestamp=lte.'+dayEnd+'&order=timestamp.asc'),
+      DB.get('/rest/v1/checkouts?timestamp=gte.'+dayStart+'&timestamp=lte.'+dayEnd+'&order=timestamp.asc'),
+    ]);
+
+    // Build checkout lookup
+    const coMap = {};
+    coData.forEach(co => { if(co.uid) coMap[co.uid] = co.check_out_ms; });
+
+    // Build attendance map from checkins
+    const attMap = {};
+    ciData.forEach(ci => {
+      if(!ci.uid) return;
+      const agent = AGENTS.find(a => (a.uid||a.id) === ci.uid);
+      const name  = agent
+        ? (agent.name && agent.name !== ci.uid ? agent.name : agent.email?.split('@')[0] || ci.uid)
+        : (ci.name || ci.uid);
+      if(!attMap[ci.uid]) {
+        attMap[ci.uid] = {
+          uid:      ci.uid,
+          name:     name,
+          role:     agent?.role || ci.role || '',
+          rigger:   ci.rigger || '—',
+          checkin:  ci.check_in_ms,
+          checkout: coMap[ci.uid] || null,
+        };
+      }
+    });
+
+    // Build attendance array
+    attendance = Object.values(attMap);
+
+    // Update checkedInTodayUids for live map filter
+    if(date === today()) {
+      checkedInTodayUids = new Set(Object.keys(attMap));
+    }
+
+    // Add absent LCC members
+    AGENTS.forEach(agent => {
+      const uid = agent.uid || agent.id;
+      if(attMap[uid]) return;
+      const name = agent.name && agent.name !== uid ? agent.name : agent.email?.split('@')[0] || uid;
+      attendance.push({ uid, name, role: agent.role||'', rigger:'—', checkin:null, checkout:null });
+    });
+
+    renderAttDashboard();
+    renderAttTable();
+
+  } catch(e) {
+    console.error('[loadAttendance]', e);
+    if(tb) tb.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--danger)">Failed to load: '+escH(e.message)+'</td></tr>';
+  }
+}
+
+
+function renderAttDashboard() {
+  const total   = attendance.length;
+  const present  = attendance.filter(a=>a.checkin&&!a.checkout).length;
+  const fullday  = attendance.filter(a=>a.checkin&&a.checkout&&(a.checkout-a.checkin)>=8*3600000).length;
+  const half     = attendance.filter(a=>a.checkin&&a.checkout&&(a.checkout-a.checkin)<8*3600000).length;
+  const absent   = attendance.filter(a=>!a.checkin).length;
+  const rate     = total ? Math.round((present+fullday+half)/total*100) : 0;
+
+  // Update just the stat section — don't touch date controls
+  const attDash=document.getElementById('att-dashboard');
+  if(!attDash) return;
+  attDash.innerHTML = `
+    <div class="att-stat"><div class="att-stat-label">Total Team</div><div class="att-stat-val" style="color:var(--primary)">${total}</div></div>
+    <div class="att-stat"><div class="att-stat-label">Present</div><div class="att-stat-val" style="color:#10B981">${present}</div><div class="att-stat-sub">In field</div></div>
+    <div class="att-stat"><div class="att-stat-label">Full Day</div><div class="att-stat-val" style="color:#10B981">${fullday}</div><div class="att-stat-sub">8h+ shift</div></div>
+    <div class="att-stat"><div class="att-stat-label">Half Day</div><div class="att-stat-val" style="color:#F59E0B">${half}</div><div class="att-stat-sub">Under 8h</div></div>
+    <div class="att-stat"><div class="att-stat-label">Absent</div><div class="att-stat-val" style="color:var(--danger)">${absent}</div></div>
+    <div class="att-stat"><div class="att-stat-label">Att. Rate</div><div class="att-stat-val" style="color:#8B5CF6">${rate}%</div></div>
+`;
+}
+
+function renderAttTable() {
+  const search = document.getElementById('att-search')?.value?.toLowerCase()||'';
+  let rows = attendance.filter(a => {
+    if (attRoleFilter !== 'all' && a.role !== attRoleFilter) return false;
+    if (search && !a.name?.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  rows.sort((a,b) => {
+    if (attSortBy === 'name')   return (a.name||'').localeCompare(b.name||'');
+    if (attSortBy === 'role')   return (a.role||'').localeCompare(b.role||'');
+    if (attSortBy === 'status') {
+      const s = r => {
+        if(!r.checkin) return 3; // Absent — bottom
+        if(!r.checkout) return 0; // Present (still in field) — top
+        const h=(r.checkout-r.checkin)/3600000;
+        return h>=8 ? 1 : 2; // Full Day, then Half Day
+      };
+      return s(a)-s(b) || (a.name||'').localeCompare(b.name||'');
+    }
+    return 0;
+  });
+
+  // Compute per-person attendance rate (checkins in last 30 days — simplified from today's data)
+  const tbody = document.getElementById('att-tbody');
+  const empty = document.getElementById('att-empty');
+  if(!tbody) return;
+
+  if (!rows.length) {
+    tbody.innerHTML='';
+    empty.style.display='flex';
+    return;
+  }
+  empty.style.display='none';
+
+  // Update role filter pills from current data
+  const pillsEl = document.getElementById('att-role-pills');
+  if(pillsEl) {
+    const roles = [...new Set(attendance.map(a=>a.role).filter(Boolean))].sort();
+    pillsEl.innerHTML = `<button class="pill ${attRoleFilter==='all'?'on':''}" onclick="setAttRoleFilter('all',this)">All</button>`
+      + roles.map(r=>`<button class="pill ${attRoleFilter===r?'on':''}" onclick="setAttRoleFilter('${r}',this)">${r}</button>`).join('');
+  }
+
+  tbody.innerHTML = rows.map(a => {
+    const hasCI = !!a.checkin;
+    const hasCO = !!a.checkout;
+    const durHours = (hasCI && hasCO) ? (a.checkout - a.checkin) / 3600000 : 0;
+    const status = !hasCI ? 'absent' : !hasCO ? 'present' : durHours >= 8 ? 'fullday' : 'half';
+    const statusBadge = {
+      present:`<span class="badge-green">Present</span>`,
+      fullday:`<span class="badge-green">Full Day</span>`,
+      half:`<span class="badge-amber">Half Day</span>`,
+      absent:`<span class="badge-red">Absent</span>`,
+    }[status];
+    const color = getColor(a.uid);
+    const dur = fmtDur(a.checkin, a.checkout);
+
+    return `<tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:28px;height:28px;border-radius:50%;background:${color};
+            display:flex;align-items:center;justify-content:center;
+            font-size:10px;font-weight:800;color:#fff;font-family:'IBM Plex Mono',monospace;flex-shrink:0">
+            ${initials(a.name)}
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:12px">${
+          a.name && a.name !== a.uid ? a.name : 
+          (members.find(m=>m.id===a.uid)?.email?.split('@')[0] || a.name || '—')
+        }</div>
+            <div class="person-gauge"><div class="person-gauge-fill" style="width:${hasCI?hasCO?60:100:0}%"></div></div>
+          </div>
+        </div>
+      </td>
+      <td><span class="badge badge-blue">${a.role||'—'}</span></td>
+      <td>${statusBadge}</td>
+      <td class="mono" style="color:var(--green)">${fmtTime(a.checkin)}</td>
+      <td class="mono" style="color:var(--ink3)">${fmtTime(a.checkout)}</td>
+      <td class="mono" style="color:var(--accent)">${dur}</td>
+      <td style="font-size:11px;color:var(--ink3)">${a.rigger||'—'}</td>
+      <td>
+        <div style="font-size:10px;color:var(--ink4);margin-bottom:3px">
+          ${hasCI?(hasCO?(durHours>=8?'Full shift recorded':'Partial shift — '+durHours.toFixed(1)+'h'):'In field — no checkout'):'Not checked in'}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function setAttRoleFilter(f,btn) {
+  attRoleFilter = f;
+  document.querySelectorAll('#att-role-pills .pill').forEach(p=>p.classList.remove('on'));
+  btn.classList.add('on');
+  renderAttTable();
+}
+function sortAtt(by) { attSortBy=by; renderAttTable(); }
+
+function exportAttCSV() {
+  const date = document.getElementById('att-date')?.value || today();
+  const header = 'Name,Role,Status,Check In,Check Out,Duration,Rigger';
+  const rows = attendance.map(a => {
+    const durH=(a.checkin&&a.checkout)?(a.checkout-a.checkin)/3600000:0; const status=!a.checkin?'Absent':!a.checkout?'Present':durH>=8?'Full Day':'Half Day';
+    return [a.name, a.role, status, fmtTime(a.checkin), fmtTime(a.checkout), fmtDur(a.checkin,a.checkout), a.rigger].join(',');
+  });
+  const blob = new Blob([[header,...rows].join('\n')],{type:'text/csv'});
+  const anchor = document.createElement('a');
+  anchor.href = URL.createObjectURL(blob);
+  anchor.download = `attendance_${date}.csv`;
+  anchor.click();
+}
 </script>
+
+<!-- ═══ ATTENDANCE FULL PAGE ═══════════════════════════════════════════ -->
+<div id="att-full-page" style="display:none;position:fixed;inset:0;background:var(--bg,#F7F7F9);z-index:9000;flex-direction:column;overflow:hidden">
+  <!-- Header -->
+  <div style="display:flex;align-items:center;gap:12px;padding:0 24px;height:58px;background:var(--surface,#fff);border-bottom:1px solid var(--border);flex-shrink:0">
+    <button onclick="closeAttPage()" style="width:34px;height:34px;border:1px solid var(--border);border-radius:9px;background:var(--bg);cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;color:var(--text)">←</button>
+    <div style="font-size:17px;font-weight:800;color:var(--text)">✅ Attendance</div>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      <label style="font-size:11px;font-weight:600;color:var(--muted)">Date</label>
+      <input type="date" class="ctrl-input" id="att-date" style="width:145px" value="">
+      <button class="btn btn-primary btn-sm" onclick="loadAttendance()">Load</button>
+      <button class="btn btn-outline btn-sm" onclick="exportAttCSV()">⤓ CSV</button>
+      <div style="font-size:11px;color:var(--muted)" id="att-date-label"></div>
+    </div>
+  </div>
+  <!-- Stats -->
+  <div style="display:flex;gap:12px;flex-wrap:wrap;padding:16px 24px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)" id="att-dashboard">
+    <div class="att-stat"><div class="att-stat-label">Total Team</div><div class="att-stat-val" style="color:var(--primary)">—</div></div>
+    <div class="att-stat"><div class="att-stat-label">Present</div><div class="att-stat-val" style="color:#10B981">—</div></div>
+    <div class="att-stat"><div class="att-stat-label">Full Day</div><div class="att-stat-val" style="color:#10B981">—</div></div>
+    <div class="att-stat"><div class="att-stat-label">Half Day</div><div class="att-stat-val" style="color:#F59E0B">—</div></div>
+    <div class="att-stat"><div class="att-stat-label">Absent</div><div class="att-stat-val" style="color:var(--danger)">—</div></div>
+    <div class="att-stat"><div class="att-stat-label">Att. Rate</div><div class="att-stat-val" style="color:#8B5CF6">—</div></div>
+  </div>
+  <!-- Toolbar -->
+  <div style="display:flex;align-items:center;gap:10px;padding:10px 24px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface);flex-wrap:wrap">
+    <input class="ctrl-input" id="att-search" placeholder="⌕  Search member…" style="width:200px;padding:6px 10px" oninput="renderAttTable()">
+    <div class="filter-pills" id="att-role-pills">
+      <button class="pill on" onclick="setAttRoleFilter('all',this)">All</button>
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="loadAttendance()" style="margin-left:auto">🔄 Refresh</button>
+  </div>
+  <!-- Table -->
+  <div style="flex:1;overflow-y:auto;padding:0 24px 24px">
+    <div class="att-table-wrap" style="margin-top:8px">
+      <table>
+        <thead>
+          <tr>
+            <th onclick="sortAtt('name')" style="min-width:160px">Member ↕</th>
+            <th onclick="sortAtt('role')">Role</th>
+            <th onclick="sortAtt('status')">Status</th>
+            <th>Check In</th>
+            <th>Check Out</th>
+            <th>Duration</th>
+            <th>Rigger</th>
+            <th style="min-width:140px">Attendance Rate</th>
+          </tr>
+        </thead>
+        <tbody id="att-tbody"></tbody>
+      </table>
+      <div id="att-empty" class="empty-state" style="display:none">
+        <div style="font-size:28px;margin-bottom:4px">📋</div>
+        <div style="font-size:13px;font-weight:600">No attendance records</div>
+        <div style="font-size:11px">Select a date and click Load</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
