@@ -349,8 +349,8 @@ textarea{resize:vertical;min-height:80px;}
     <div class="topbar-left">
       <div class="topbar-brand"><div class="logo-dot"></div>OnRoute</div>
       <div class="module-switcher">
-        <button class="mod-btn active" id="mod-audit" onclick="switchModule('audit')">📋 Site Audit</button>
-        <button class="mod-btn" id="mod-activity" onclick="switchModule('activity')">📌 Activities</button>
+        <button class="mod-btn active" id="mod-activity" onclick="switchModule('activity')">📌 Activities</button>
+        <button class="mod-btn" id="mod-audit" onclick="switchModule('audit')">📋 Site Audit</button>
         <button class="mod-btn" id="mod-livemap" style="display:none" onclick="switchModule('livemap')">🗺 Live Map</button>
       </div>
     </div>
@@ -632,9 +632,9 @@ async function doLogin() {
     uid: data.user.id, email: data.user.email,
     name: prof.name||data.user.email, company: prof.company||'',
     role: prof.role||'', token: data.access_token,
+    refreshToken: data.refresh_token || null,
     isCoordinator: (prof.role||'').toLowerCase() === 'coordinator'
   };
-  AUTH.loginTime = Date.now();
   try{ localStorage.setItem('onroute_auth', JSON.stringify(AUTH)); } catch(e){}
   showApp();
 }
@@ -645,25 +645,18 @@ function showApp() {
   document.getElementById('app-shell').style.flexDirection = 'column';
   document.getElementById('user-av').textContent = (AUTH.name||'U').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
   document.getElementById('user-nm').textContent = AUTH.name||'';
-  MODULE='audit'; A_PAGE='new';
-  document.getElementById('mod-audit').classList.add('active');
-  document.getElementById('mod-activity').classList.remove('active');
+  MODULE='activity'; AC_PAGE='dashboard';
+  document.getElementById('mod-activity').classList.add('active');
+  document.getElementById('mod-audit').classList.remove('active');
   showLiveMapTabIfCoordinator();
   loadSites(); loadAuditHistory(); loadApproverGrids(); loadActivities();
   render();
   if(window._sessionTimer) clearInterval(window._sessionTimer);
-  window._sessionTimer = setInterval(function(){
-    const SESSION_MAX = 4.5 * 60 * 60 * 1000;
-    if(AUTH && AUTH.loginTime && (Date.now() - AUTH.loginTime) > SESSION_MAX) {
-      clearInterval(window._sessionTimer);
-      alert('Your session has expired after 4.5 hours. Please sign in again.');
-      doSignOut();
-    }
-  }, 15 * 60 * 1000);
+
 }
 
 function doSignOut() {
-  DB.auth.signOut(); AUTH=null; MODULE='audit'; A_PAGE='new'; AC_PAGE='new_activity';
+  DB.auth.signOut(); AUTH=null; MODULE='activity'; A_PAGE='new'; AC_PAGE='dashboard';
   try{ localStorage.removeItem('onroute_auth'); } catch(e){}
   if(window._sessionTimer) clearInterval(window._sessionTimer);
   resetAuditForm();
@@ -2560,26 +2553,69 @@ function showLiveMapTabIfCoordinator(){
 
 
 // ── RESTORE SESSION ON PAGE LOAD ──────────────────────────────
-document.addEventListener('DOMContentLoaded', function(){
-  try{
+// Uses refresh_token to silently renew access — no arbitrary expiry.
+// Session only ends when the user clicks Sign Out.
+async function tryRefreshToken(refreshToken) {
+  try {
+    const r = await fetch(SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST',
+      headers: { 'apikey': SB_ANON, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken })
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j.access_token) return null;
+    return { access_token: j.access_token, refresh_token: j.refresh_token || refreshToken };
+  } catch(e) { return null; }
+}
+
+document.addEventListener('DOMContentLoaded', async function(){
+  try {
     const saved = localStorage.getItem('onroute_auth');
-    if(!saved) return;
+    if (!saved) return;
     const a = JSON.parse(saved);
-    if(!a||!a.uid||!a.token) return;
-    // Expire session after 4.5 hours
-    const SESSION_MAX = 4.5 * 60 * 60 * 1000;
-    if(a.loginTime && (Date.now() - a.loginTime) > SESSION_MAX) {
-      console.log('Session expired after 4.5h — forcing re-login');
-      try{ localStorage.removeItem('onroute_auth'); } catch(e){}
-      return; // stay on login screen
-    }
-    DB._tok = a.token;
-    // Recalculate isCoordinator in case it wasn't saved correctly
+    if (!a || !a.uid) return;
     a.isCoordinator = (a.role||'').toLowerCase() === 'coordinator';
+
+    // Always try to refresh the token silently on page load
+    if (a.refreshToken) {
+      const refreshed = await tryRefreshToken(a.refreshToken);
+      if (refreshed) {
+        // Got a fresh access token — update stored session
+        a.token        = refreshed.access_token;
+        a.refreshToken = refreshed.refresh_token;
+        try { localStorage.setItem('onroute_auth', JSON.stringify(a)); } catch(e){}
+        DB._tok = a.token;
+        AUTH = a;
+        showApp();
+        return;
+      }
+      // Refresh failed (revoked / user deleted) — fall through to check existing token
+    }
+
+    // No refresh token or refresh failed — try existing access token
+    if (!a.token) return;
+    DB._tok = a.token;
     AUTH = a;
     showApp();
-  } catch(e){ console.log('Session restore failed:',e); }
+  } catch(e) { console.log('Session restore failed:', e); }
 });
+
+// Auto-refresh token every 50 minutes while the page is open
+// (Supabase access tokens expire after 1 hour by default)
+setInterval(async function(){
+  if (!AUTH || !AUTH.refreshToken) return;
+  const refreshed = await tryRefreshToken(AUTH.refreshToken);
+  if (refreshed) {
+    AUTH.token        = refreshed.access_token;
+    AUTH.refreshToken = refreshed.refresh_token;
+    DB._tok           = AUTH.token;
+    try { localStorage.setItem('onroute_auth', JSON.stringify(AUTH)); } catch(e){}
+    console.log('[auth] Token silently refreshed');
+  } else {
+    console.warn('[auth] Silent refresh failed — user may need to re-login');
+  }
+}, 50 * 60 * 1000); // every 50 minutes
 
 // ════════════════════════════════════════════════════════════════
 // ANALYTICS DASHBOARD
