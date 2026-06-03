@@ -653,12 +653,30 @@ function showApp() {
   render();
   if(window._sessionTimer) clearInterval(window._sessionTimer);
 
+  // Auto-poll pending approvals every 60s — badge updates silently in background
+  if(window._approvalPoll) clearInterval(window._approvalPoll);
+  window._approvalPoll = setInterval(async () => {
+    if (!AUTH || APPROVER_GRIDS.length === 0) return;
+    try {
+      const all = [];
+      for (const g of APPROVER_GRIDS) {
+        const rows = await DB.get('/rest/v1/site_audits?status=eq.pending_approval&grid_id=eq.'+encodeURIComponent(g)+'&order=submitted_at.desc');
+        all.push(...rows);
+      }
+      if (all.length !== PEND_BADGE) {
+        PEND_AUDITS = all; PEND_BADGE = all.length;
+        renderSidebar();
+        if (MODULE === 'audit' && A_PAGE === 'approvals') renderPage();
+      }
+    } catch(e) { console.warn('[auto-poll approvals]', e); }
+  }, 60000);
 }
 
 function doSignOut() {
   DB.auth.signOut(); AUTH=null; MODULE='activity'; A_PAGE='new'; AC_PAGE='dashboard';
   try{ localStorage.removeItem('onroute_auth'); } catch(e){}
   if(window._sessionTimer) clearInterval(window._sessionTimer);
+  if(window._approvalPoll) clearInterval(window._approvalPoll);
   resetAuditForm();
   document.getElementById('app-shell').style.display  = 'none';
   document.getElementById('login-screen').style.display = 'flex';
@@ -1190,7 +1208,25 @@ function renderAuditNew(){
   const showB=SITE_TYPE==='Roof Top'||SITE_TYPE==='Water Tank';
   const bLbl=SITE_TYPE==='Water Tank'?'Tank Height (m)':'Building Height (m)';
   const tLbl=SITE_TYPE==='Water Tank'?'Pole Height (m)':'Tower Height (m)';
-  const techs=!SEL_SITE?[]:IS_CUSTOM||!SEL_SITE.siteTech?TECHS:(()=>{const p=SEL_SITE.siteTech.split('+').map(x=>x.trim());return TECHS.filter(t=>p.some(pp=>pp.includes(t.replace('G',''))));})();
+  // Determine which tech panels to show based on site's siteTech field.
+  // Default is 4G+3G+2G — 5G only shown when siteTech explicitly contains '5G' or 'NR'.
+  // IS_CUSTOM sites also default to 4G+3G+2G (no 5G assumed).
+  const DEFAULT_TECHS = ['4G','3G','2G'];
+  const techs = !SEL_SITE ? [] : (()=>{
+    const raw = SEL_SITE.siteTech || '';
+    if (!raw.trim()) return DEFAULT_TECHS;          // blank → no 5G assumption
+    const p = raw.split(/[+,/]/).map(x=>x.trim().toUpperCase());
+    const has5G = p.some(pp => pp.includes('5G') || pp.includes('NR'));
+    const has4G = p.some(pp => pp.includes('4G') || pp.includes('LTE'));
+    const has3G = p.some(pp => pp.includes('3G') || pp.includes('UMTS') || pp.includes('WCDMA'));
+    const has2G = p.some(pp => pp.includes('2G') || pp.includes('GSM'));
+    const detected = [];
+    if (has5G) detected.push('5G');
+    if (has4G) detected.push('4G');
+    if (has3G) detected.push('3G');
+    if (has2G) detected.push('2G');
+    return detected.length ? detected : DEFAULT_TECHS;
+  })();
   const panels=SEL_SITE?techs.map((t,i)=>techPanel(t,i,techs)).join(''):`<div class="empty-state" style="background:var(--bg);border-radius:8px;padding:28px"><div class="ei">🔍</div><p>Search and select a site above to load sector details.</p></div>`;
   let banner='<div id="site-banner" style="display:none"></div>';
   if(SEL_SITE&&isR) banner=`<div id="site-banner" class="site-banner resubmit">↺ <strong>Resubmitting — ${escH(SEL_SITE.siteId)}</strong></div>`;
@@ -1224,7 +1260,7 @@ ${isR||isA?`<button class="btn btn-outline btn-full" style="margin-top:10px" onc
 </div>`;}
 
 function techPanel(tech,idx,allTechs){
-  const cf=idx>0?(allTechs.includes('5G')&&tech!=='5G'?'5G':allTechs[idx-1]):null;
+  const cf=idx>0?allTechs[idx-1]:null;  // always copy from previous tech, never assume 5G
   return`<div class="tech-panel">
 <div class="tech-hdr tech-${tech.toLowerCase()}"><h4>📡 ${tech} Sector Details</h4>
 ${cf?`<button class="btn btn-sm" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.3)" onclick="copyTech('${cf}','${tech}')">Copy from ${cf}</button>`:''}</div>
@@ -1277,7 +1313,7 @@ function renderAuditApprovals(){
 <div class="page-hdr">
   <div><div class="page-title">Approvals</div>
   <div class="page-sub">Grids: ${escH(APPROVER_GRIDS.join(', ')||'None assigned')}</div></div>
-  <button class="btn btn-outline btn-sm" onclick="loadPending();loadApprovalHistory();renderPage()">🔄 Refresh</button>
+  <button class="btn btn-outline btn-sm" onclick="loadPending();loadApprovalHistory()">🔄 Refresh</button>
 </div>
 
 <div style="display:flex;gap:8px;margin-bottom:20px">
@@ -1826,6 +1862,23 @@ AGENTS.map(ag=>`<div style="display:flex;align-items:center;justify-content:spac
   if(m.type==='audit_detail'){
     const a=m.audit, isApr=m.isApprover;
     const secs=(()=>{try{return Array.isArray(a.sectors)?a.sectors:JSON.parse(a.sectors||'[]');}catch{return[];}})();
+
+    // Look up site technology from SSL_CACHE — same source as the app
+    const sslSite = SSL_CACHE.find(s => s.siteId === (a.site_id||'').trim());
+    const rawTech = (sslSite?.siteTech || '').trim();
+    // Parse tech string e.g. "5G NR+4G LTE+3G UMTS+2G GSM" or "4G/3G/2G"
+    const _tp = rawTech ? rawTech.split(/[+,/]/).map(x=>x.trim().toUpperCase()) : [];
+    const _has = t => _tp.some(p => p.includes(t));
+    const siteShowTechs = rawTech
+      ? TECHS.filter(t => {
+          if (t==='5G') return _has('5G') || _has('NR');
+          if (t==='4G') return !rawTech || _has('4G') || _has('LTE');
+          if (t==='3G') return !rawTech || _has('3G') || _has('UMTS') || _has('WCDMA');
+          if (t==='2G') return !rawTech || _has('2G') || _has('GSM');
+          return true;
+        })
+      : ['4G','3G','2G'];  // no SSL entry → default no 5G assumption
+
     mc.innerHTML=`<div class="modal-bg"><div class="modal">
 <div class="modal-hdr"><h3>📋 Audit — ${escH(a.site_id)}</h3><button class="btn-x" onclick="closeModal()">✕</button></div>
 <div class="modal-body">
@@ -1843,16 +1896,20 @@ AGENTS.map(ag=>`<div style="display:flex;align-items:center;justify-content:spac
 ${a.remarks?`<div style="margin-top:10px"><div class="dk">Remarks</div><div style="font-size:13px;margin-top:3px">${escH(a.remarks)}</div></div>`:''}
 ${a.approver_remarks?`<div class="${a.status==='rejected'?'reject-box':'approve-box'}" style="margin-top:10px"><b>${a.status==='rejected'?'Rejection Reason':'Approver Remarks'}:</b> ${escH(a.approver_remarks)}</div>`:''}
 </div>
-${secs.map(sec=>`<hr class="sep"/>
+${(()=>{
+  // Use SSL-derived techs — already computed above as siteShowTechs
+  const showTechs = siteShowTechs;
+  return secs.map(sec=>`<hr class="sep"/>
 <div><b style="font-size:13px">Sector ${escH(sec.sector)}${sec.antenna_height?' · H: '+sec.antenna_height+'m':''}</b>
 <div style="overflow-x:auto;margin-top:8px">
 <table style="width:100%;border-collapse:collapse;min-width:400px;font-size:12px">
 <thead><tr><th style="padding:6px 10px;background:var(--bg);border-bottom:1px solid var(--border);text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase">Field</th>
-${TECHS.map(t=>`<th style="padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--border);text-align:center;font-size:11px;color:var(--muted);text-transform:uppercase">${t}</th>`).join('')}</tr></thead>
+${showTechs.map(t=>`<th style="padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--border);text-align:center;font-size:11px;color:var(--muted);text-transform:uppercase">${t}</th>`).join('')}</tr></thead>
 <tbody>${[['Antenna','antenna_type'],['Azimuth','azimuth'],['M.Tilt','m_tilt'],['E.Tilt','e_tilt']].map(([lbl,key])=>`<tr>
 <td style="padding:5px 10px;color:var(--muted);border-bottom:1px solid var(--border);font-weight:600">${lbl}</td>
-${TECHS.map(t=>{const td=sec['tech_'+t.toLowerCase()];return`<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);font-family:var(--mono)">${escH((td&&td[key])||'—')}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>
-${sec.photo_url?`<div style="margin-top:8px"><img src="${escH(sec.photo_url)}" class="photo-thumb" onclick="openPhotoZoom(this.src)"/></div>`:''}</div>`).join('')}
+${showTechs.map(t=>{const td=sec['tech_'+t.toLowerCase()];return`<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);font-family:var(--mono)">${escH((td&&td[key])||'—')}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>
+${sec.photo_url?`<div style="margin-top:8px"><img src="${escH(sec.photo_url)}" class="photo-thumb" onclick="openPhotoZoom(this.src)"/></div>`:''}</div>`).join('');
+})()}
 ${(function(){
   var tp=a.tower_photo_url;
   var allLegs=[a.leg1_photo_url,a.leg2_photo_url,a.leg3_photo_url,a.leg4_photo_url];
