@@ -958,6 +958,7 @@ async function loadActivities() {
     MY_ACTS      = await DB.get('/rest/v1/activities?created_by=eq.'+AUTH.uid+'&order=created_at.desc&limit=100');
     ALL_ACTS     = await DB.get('/rest/v1/activities?order=created_at.desc&limit=500');
     AGENTS       = await DB.get('/rest/v1/users?company=ilike.*LCC*&select=uid,name,email,role&order=name.asc');
+    AGENTS.forEach(a => profilePicUrl(a.uid||a.id));
     CMPAK_USERS  = await DB.get('/rest/v1/users?company=ilike.*CMPAK*&select=uid,name,email,role&order=name.asc');
   } catch(e) {
     console.error('loadActivities error:', e);
@@ -1292,7 +1293,7 @@ function renderAttOvTable() {
     return `<tr style="border-bottom:1px solid var(--border)">
       <td style="padding:10px 12px">
         <div style="display:flex;align-items:center;gap:8px">
-          <div style="width:28px;height:28px;border-radius:50%;background:${col};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;flex-shrink:0">${ini}</div>
+          <div data-uid="${r.uid}" style="width:28px;height:28px;border-radius:50%;background:${col}${picUrl?' url('+picUrl+') center/cover':''};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff;flex-shrink:0">${picUrl?'':ini}</div>
           <div style="font-weight:700;font-size:12px">${escH(r.name)}</div>
         </div>
       </td>
@@ -1403,6 +1404,46 @@ function exportLmAttCSV() {
 
 
 
+// ── Profile Pictures ──────────────────────────────────────────────────────────
+const PROFILE_PIC_CACHE = {}; // uid → url or null
+
+function profilePicUrl(uid) {
+  if (!uid) return null;
+  if (PROFILE_PIC_CACHE[uid] !== undefined) return PROFILE_PIC_CACHE[uid];
+  // Return null initially — load async and update markers when ready
+  PROFILE_PIC_CACHE[uid] = null;
+  fetch(SB_URL + '/storage/v1/object/public/profile-pics/profile_' + uid + '.jpg', {method:'HEAD'})
+    .then(r => {
+      const url = r.ok ? SB_URL + '/storage/v1/object/public/profile-pics/profile_' + uid + '.jpg' : null;
+      PROFILE_PIC_CACHE[uid] = url;
+      if (url) {
+        // Update any visible pin/avatar for this uid
+        document.querySelectorAll('[data-uid="'+uid+'"]').forEach(el => {
+          el.style.backgroundImage = 'url('+url+')';
+          el.style.backgroundSize  = 'cover';
+          el.style.backgroundPosition = 'center';
+          el.textContent = '';
+        });
+        // Refresh map marker if on live map
+        if (typeof lmUpdateMarkers === 'function') {
+          const m = _lmMembers?.find(x=>x.uid===uid);
+          if (m && _lmLocations?.[uid]) lmUpdateMarkers();
+        }
+      }
+    }).catch(()=>{ PROFILE_PIC_CACHE[uid] = null; });
+  return null;
+}
+
+function avatarHtml(uid, name, size=36, fontSize=13) {
+  const url = profilePicUrl(uid);
+  const color = getColor(uid);
+  const ini = initials(name);
+  if (url) {
+    return `<div data-uid="${uid}" style="width:${size}px;height:${size}px;border-radius:50%;background:${color} url(${url}) center/cover;flex-shrink:0"></div>`;
+  }
+  return `<div data-uid="${uid}" style="width:${size}px;height:${size}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;font-size:${fontSize}px;font-weight:800;color:#fff;flex-shrink:0">${ini}</div>`;
+}
+
 // ── Utility functions (needed by attendance + other features) ─────────────────
 function today(){ return new Date().toISOString().slice(0,10); }
 function fmtTime(ms){ if(!ms) return '—'; return new Date(ms).toLocaleTimeString('en-PK',{hour:'2-digit',minute:'2-digit'}); }
@@ -1424,6 +1465,213 @@ function initials(name){
   const w = name.trim().split(/\s+/);
   return (w[0][0]+(w[1]?w[1][0]:'')).toUpperCase();
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BULK ACTIVITY UPLOAD
+// ══════════════════════════════════════════════════════════════════════════════
+const BULK_SAMPLE_ROWS = [
+  ['type','title','description','site_id','region','priority','poc_name','instructions_team'],
+  ['corporate_complaint','Sample Title','Description here','44001','Central-1','Medium','John Doe','Instructions for team'],
+  ['customer_complaint','Another Activity','More details','44002','Central-2','High','Jane Smith',''],
+];
+
+function downloadBulkSample(){
+  // Build CSV
+  const csv = BULK_SAMPLE_ROWS.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv'});
+  const a = document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='bulk_activities_sample.csv'; a.click();
+}
+
+function openBulkUpload(){
+  let ov = document.getElementById('bulk-upload-overlay');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'bulk-upload-overlay';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9500;display:flex;align-items:center;justify-content:center;padding:20px';
+    document.body.appendChild(ov);
+  }
+  ov.style.display='flex';
+  ov.innerHTML=`
+    <div style="background:#fff;border-radius:16px;width:100%;max-width:700px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+      <!-- Header -->
+      <div style="display:flex;align-items:center;gap:12px;padding:18px 24px;border-bottom:1px solid var(--border)">
+        <div style="font-size:17px;font-weight:800;color:var(--text);flex:1">📥 Bulk Activity Upload</div>
+        <button onclick="closeBulkUpload()" style="width:32px;height:32px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-size:18px">✕</button>
+      </div>
+      <!-- Body -->
+      <div style="flex:1;overflow-y:auto;padding:24px">
+        <!-- Step 1: Download sample -->
+        <div style="background:#F0F7FF;border:1px solid #BFDBFE;border-radius:12px;padding:16px;margin-bottom:20px">
+          <div style="font-size:13px;font-weight:700;color:#1E40AF;margin-bottom:6px">Step 1 — Download Sample CSV</div>
+          <div style="font-size:12px;color:#374151;margin-bottom:10px">Fill in the sample file with your activities. Required columns: <b>type, title</b>. Optional: description, site_id, region, priority, poc_name, instructions_team.</div>
+          <div style="font-size:11px;color:#6B7280;margin-bottom:10px"><b>Valid types:</b> ${ACT_TYPES.map(t=>t.id).join(', ')}</div>
+          <div style="font-size:11px;color:#6B7280;margin-bottom:10px"><b>Valid priorities:</b> Critical, High, Medium, Low</div>
+          <button class="btn btn-primary btn-sm" onclick="downloadBulkSample()" style="font-size:12px">⤓ Download Sample CSV</button>
+        </div>
+        <!-- Step 2: Upload -->
+        <div style="margin-bottom:20px">
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">Step 2 — Upload Filled CSV</div>
+          <input type="file" id="bulk-file-input" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleBulkFile(this)">
+          <div onclick="document.getElementById('bulk-file-input').click()" style="border:2px dashed var(--border);border-radius:10px;padding:28px;text-align:center;cursor:pointer;background:var(--bg);transition:all .15s"
+            onmouseover="this.style.borderColor='var(--accent)';this.style.background='#EFF6FF'"
+            onmouseout="this.style.borderColor='var(--border)';this.style.background='var(--bg)'">
+            <div style="font-size:28px;margin-bottom:8px">📄</div>
+            <div style="font-size:13px;font-weight:600;color:var(--text)">Click to choose file</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">CSV, XLS, or XLSX</div>
+          </div>
+        </div>
+        <!-- Preview -->
+        <div id="bulk-preview" style="display:none">
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">Step 3 — Review & Import</div>
+          <div id="bulk-preview-content"></div>
+          <div style="margin-top:16px;display:flex;gap:10px">
+            <button class="btn btn-primary" onclick="executeBulkImport()" id="bulk-import-btn" style="font-size:13px">⬆ Import Activities</button>
+            <button class="btn btn-outline" onclick="document.getElementById('bulk-preview').style.display='none'" style="font-size:13px">Cancel</button>
+          </div>
+        </div>
+        <!-- Result -->
+        <div id="bulk-result" style="display:none"></div>
+      </div>
+    </div>`;
+}
+
+function closeBulkUpload(){
+  const ov=document.getElementById('bulk-upload-overlay');
+  if(ov) ov.style.display='none';
+}
+
+window._bulkRows = [];
+
+function handleBulkFile(input){
+  const file = input.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    const text = e.target.result;
+    // Parse CSV
+    const lines = text.split(/\r?\n/).filter(l=>l.trim());
+    if(lines.length < 2){ alert('File must have a header row and at least one data row.'); return; }
+    const headers = lines[0].split(',').map(h=>h.trim().replace(/^"|"$/g,'').toLowerCase());
+    const rows = lines.slice(1).map(line=>{
+      // Handle quoted CSV
+      const vals=[]; let cur='',inQ=false;
+      for(let i=0;i<line.length;i++){
+        if(line[i]==='"'){inQ=!inQ;}
+        else if(line[i]===','&&!inQ){vals.push(cur.trim());cur='';}
+        else cur+=line[i];
+      }
+      vals.push(cur.trim());
+      const obj={};
+      headers.forEach((h,i)=>{ obj[h]=vals[i]||''; });
+      return obj;
+    }).filter(r=>r.type||r.title);
+
+    window._bulkRows = rows;
+    showBulkPreview(rows, headers);
+  };
+  reader.readAsText(file);
+  input.value='';
+}
+
+function showBulkPreview(rows, headers){
+  const preview = document.getElementById('bulk-preview');
+  const content = document.getElementById('bulk-preview-content');
+  if(!preview||!content) return;
+  preview.style.display='block';
+
+  const validTypes = new Set(ACT_TYPES.map(t=>t.id));
+  let validCount=0, errors=[];
+
+  const tableRows = rows.map((r,i)=>{
+    const typeOk  = validTypes.has(r.type);
+    const titleOk = r.title && r.title.trim().length > 0;
+    const rowOk   = typeOk && titleOk;
+    if(rowOk) validCount++;
+    else {
+      if(!typeOk) errors.push('Row '+(i+1)+': invalid type "'+r.type+'"');
+      if(!titleOk) errors.push('Row '+(i+1)+': title is required');
+    }
+    return `<tr style="background:${rowOk?'':'#FEF2F2'}">
+      <td style="padding:5px 8px;font-family:monospace;font-size:11px">${i+1}</td>
+      <td style="padding:5px 8px;font-size:11px"><span style="padding:2px 7px;border-radius:20px;font-size:10px;font-weight:700;background:${typeOk?'#D1FAE5':'#FEE2E2'};color:${typeOk?'#065F46':'#991B1B'}">${escH(r.type||'—')}</span></td>
+      <td style="padding:5px 8px;font-size:12px;font-weight:600">${escH(r.title||'—')}</td>
+      <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${escH(r.site_id||'')}</td>
+      <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${escH(r.region||'')}</td>
+      <td style="padding:5px 8px;font-size:11px;color:var(--muted)">${escH(r.priority||'Medium')}</td>
+    </tr>`;
+  }).join('');
+
+  content.innerHTML = `
+    <div style="margin-bottom:10px;font-size:12px">
+      <span style="color:#065F46;font-weight:700">${validCount} valid</span>
+      ${errors.length?'<span style="color:#991B1B;font-weight:700;margin-left:10px">'+errors.length+' errors</span>':''}
+      <span style="color:var(--muted);margin-left:10px">${rows.length} total rows</span>
+    </div>
+    ${errors.length?'<div style="background:#FEF2F2;border:1px solid #FCA5A5;border-radius:8px;padding:10px;margin-bottom:12px;font-size:11px;color:#991B1B">'+errors.slice(0,5).map(escH).join('<br>')+(errors.length>5?'<br>…and '+(errors.length-5)+' more':'')+'</div>':''}
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:8px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:var(--bg)">
+          <th style="padding:7px 8px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">#</th>
+          <th style="padding:7px 8px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">Type</th>
+          <th style="padding:7px 8px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">Title</th>
+          <th style="padding:7px 8px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">Site</th>
+          <th style="padding:7px 8px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">Region</th>
+          <th style="padding:7px 8px;text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;border-bottom:1px solid var(--border)">Priority</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>`;
+
+  const btn = document.getElementById('bulk-import-btn');
+  if(btn){ btn.disabled = validCount===0; btn.textContent='⬆ Import '+validCount+' Activities'; }
+}
+
+async function executeBulkImport(){
+  const rows = window._bulkRows || [];
+  const validTypes = new Set(ACT_TYPES.map(t=>t.id));
+  const valid = rows.filter(r=>validTypes.has(r.type)&&r.title?.trim());
+  if(!valid.length){ alert('No valid rows to import.'); return; }
+
+  const btn = document.getElementById('bulk-import-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Importing…'; }
+
+  let imported=0, failed=0;
+  for(const r of valid){
+    try{
+      await DB.post('activities',{
+        id: crypto.randomUUID(),
+        type: r.type,
+        title: r.title.trim(),
+        description: r.description||'',
+        site_id: r.site_id||null,
+        region: r.region||null,
+        priority: ['Critical','High','Medium','Low'].includes(r.priority)?r.priority:'Medium',
+        poc_name: r.poc_name||null,
+        instructions_team: r.instructions_team||null,
+        status: 'open',
+        created_by: AUTH.uid,
+        created_by_name: AUTH.name,
+        company: AUTH.company,
+        created_at: new Date().toISOString(),
+        assigned_to: null, assigned_to_name: null,
+      });
+      imported++;
+    } catch(e){ console.error('[bulk]',e); failed++; }
+  }
+
+  const result = document.getElementById('bulk-result');
+  if(result){
+    result.style.display='block';
+    result.innerHTML=`<div style="background:${failed===0?'#D1FAE5':'#FEF3C7'};border:1px solid ${failed===0?'#6EE7B7':'#FCD34D'};border-radius:10px;padding:16px;font-size:13px">
+      <div style="font-weight:700;font-size:15px;color:${failed===0?'#065F46':'#92400E'};margin-bottom:4px">${failed===0?'✅':'⚠️'} Import Complete</div>
+      <div>${imported} activities imported successfully.${failed?' '+failed+' failed.':''}</div>
+    </div>`;
+  }
+  document.getElementById('bulk-preview').style.display='none';
+  if(btn){ btn.disabled=false; btn.textContent='⬆ Import Activities'; }
+  if(imported>0){ loadActivities(); }
+}
+
 // ════════════════════════════════════════════════════════════════
 // RENDER
 // ════════════════════════════════════════════════════════════════
@@ -1885,7 +2133,7 @@ function showToast(msg, type='success'){
 function renderNewActivity(){
   const cmpakOpts = CMPAK_USERS.map(u=>`<option value="${escH(u.uid)}" ${ACT_POC===u.uid?'selected':''}>${escH(u.name||u.email)}</option>`).join('');
   return`<div>
-<div class="page-title">New Activity</div>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px"><div class="page-title">New Activity</div><button class="btn btn-outline btn-sm" onclick="openBulkUpload()" style="font-size:12px">⬆ Bulk Upload</button></div>
 <div class="page-sub">Create a new field activity for tracking</div>
 ${SUBMIT_ST?`<div class="alert alert-${SUBMIT_ST.type==='success'?'success':'error'}">${escH(SUBMIT_ST.msg)}</div>`:''}
 <div class="card" style="margin-bottom:18px">
@@ -2641,7 +2889,12 @@ function lmRenderList(){
     const ago=live?.timestamp?lmTimeAgo(live.timestamp):'';
     const bat=live?.battery!=null?'🔋'+live.battery+'%':'';
     return '<div class="member-item'+(m.uid===_lmSelected?' sel':'')+'" onclick="lmSelectMember(\''+m.uid+'\')">'
-      +'<div class="av" style="background:'+color+'">'+lmInitials(m.name)+'</div>'
+      +(()=>{
+          const url=profilePicUrl(m.uid);
+          return url
+            ? '<div class="av" data-uid="'+m.uid+'" style="background:'+color+' url('+url+') center/cover"></div>'
+            : '<div class="av" data-uid="'+m.uid+'" style="background:'+color+'">'+lmInitials(m.name)+'</div>';
+        })()
       +'<div style="min-width:0;flex:1">'
         +'<div class="member-name">'+escH(m.name||'—')+'</div>'
         +'<div class="member-meta">'+(m.role||'')+(bat?' · '+bat:'')+(ago?' · '+ago:'')+'</div>'
@@ -2670,12 +2923,17 @@ function lmMakePin(m,selected){
   const rings=isActive?
     '<div style="position:absolute;top:50%;left:50%;width:'+(S+16)+'px;height:'+(S+16)+'px;border-radius:50%;border:2px solid '+color+';transform:translate(-50%,-50%);animation:lm-pin-ring 2s ease-out infinite;opacity:0;pointer-events:none"></div>'
     +'<div style="position:absolute;top:50%;left:50%;width:'+(S+8)+'px;height:'+(S+8)+'px;border-radius:50%;border:2px solid '+color+';transform:translate(-50%,-50%);animation:lm-pin-ring 2s ease-out .65s infinite;opacity:0;pointer-events:none"></div>':'';
+  const picUrl = profilePicUrl(m.uid);
+  const innerStyle = picUrl
+    ? 'background:'+color+' url('+picUrl+') center/cover;'
+    : 'background:'+color+';display:flex;align-items:center;justify-content:center;font-size:'+(selected?13:11)+'px;font-weight:800;color:#fff;letter-spacing:-0.5px;';
+  const innerContent = picUrl ? '' : lmInitials(m.name);
   const html='<div style="position:relative;width:'+(S+20)+'px;height:'+(S+20)+'px;display:flex;align-items:center;justify-content:center">'
     +rings
-    +'<div style="width:'+S+'px;height:'+S+'px;border-radius:50%;background:'+color
-    +';border:3px solid white;box-shadow:0 3px 14px '+color+'55;display:flex;align-items:center;justify-content:center'
-    +';position:relative;z-index:1;font-size:'+(selected?13:11)+'px;font-weight:800;color:#fff;letter-spacing:-0.5px">'
-    +lmInitials(m.name)+'</div></div>';
+    +'<div data-uid="'+m.uid+'" style="width:'+S+'px;height:'+S+'px;border-radius:50%;'+innerStyle
+    +';border:3px solid white;box-shadow:0 3px 14px '+color+'55'
+    +';position:relative;z-index:1;">'
+    +innerContent+'</div></div>';
   return L.divIcon({html,className:'',iconSize:[S+20,S+20],iconAnchor:[(S+20)/2,(S+20)/2]});
 }
 
@@ -3811,6 +4069,7 @@ async function loadAttendance() {
     // Ensure LCC agents are loaded
     if(!AGENTS.length) {
       AGENTS = await DB.get('/rest/v1/users?company=ilike.*LCC*&select=uid,name,email,role&order=name.asc');
+      AGENTS.forEach(a => profilePicUrl(a.uid||a.id));
     }
 
     const dayStart = date + 'T00:00:00Z';
