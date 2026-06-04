@@ -641,6 +641,9 @@ let AN_PAGE = 'overview'; // analytics sub-page
 let ACT_TYPE_SEL = '';
 let ACT_TITLE='', ACT_DESC='', ACT_SITE='', ACT_REGION='', ACT_PRIORITY='Medium', ACT_POC='';
 let ACT_COMPLAINT_LAT='', ACT_COMPLAINT_LNG='', ACT_COMPLAINT_POC='', ACT_INSTR_TEAM='';
+let ACT_ASSIGNEE_CO='LCC';
+let ACT_ASSIGNEE_UID='';
+let HW_AGENTS=[], ZTE_AGENTS=[];
 let MY_ACTS=[], ALL_ACTS=[], AGENTS=[], CMPAK_USERS=[];
 let ACT_LOAD=false;
 
@@ -955,11 +958,32 @@ function restoreSectors(sectors) {
 async function loadActivities() {
   ACT_LOAD=true; if(MODULE==='activity') renderPage();
   try {
-    MY_ACTS      = await DB.get('/rest/v1/activities?created_by=eq.'+AUTH.uid+'&order=created_at.desc&limit=100');
-    ALL_ACTS     = await DB.get('/rest/v1/activities?order=created_at.desc&limit=500');
+    const _isCmpakMy=(AUTH?.company||'').toUpperCase()==='CMPAK';
+    MY_ACTS=_isCmpakMy
+      ?await DB.get('/rest/v1/activities?created_by=eq.'+AUTH.uid+'&order=created_at.desc&limit=100')
+      :await DB.get('/rest/v1/activities?assigned_to=eq.'+AUTH.uid+'&order=created_at.desc&limit=100');
+    const _isCmpakUser=(AUTH?.company||'').toUpperCase()==='CMPAK';
+    const _isHwUser=(AUTH?.company||'').toUpperCase()==='HUAWEI';
+    const _isZteUser=(AUTH?.company||'').toUpperCase()==='ZTE';
+    // Filter by target_company first; fall back to company for legacy records
+    let ALL_ACTS_RAW;
+    if(_isCmpakUser){
+      ALL_ACTS_RAW=await DB.get('/rest/v1/activities?order=created_at.desc&limit=500');
+    } else {
+      const _coVal=_isHwUser?'Huawei':_isZteUser?'ZTE':'LCC';
+      // PostgREST OR: target_company matches OR (no target_company and company matches)
+      ALL_ACTS_RAW=await DB.get('/rest/v1/activities?order=created_at.desc&limit=500&or=(target_company.ilike.'+_coVal+',and(target_company.is.null,company.ilike.'+_coVal+'))');
+    }
+    ALL_ACTS=ALL_ACTS_RAW;
     AGENTS       = await DB.get('/rest/v1/users?company=ilike.*LCC*&select=uid,name,email,role&order=name.asc');
     AGENTS.forEach(a => profilePicUrl(a.uid||a.id));
+    if((AUTH?.company||'').toUpperCase()==='CMPAK'){
+      try{HW_AGENTS =await DB.get('/rest/v1/users?company=ilike.*Huawei*&select=uid,name,email,role&order=name.asc');}catch(e){}
+      try{ZTE_AGENTS=await DB.get('/rest/v1/users?company=ilike.*ZTE*&select=uid,name,email,role&order=name.asc');}catch(e){}
+    }
     CMPAK_USERS  = await DB.get('/rest/v1/users?company=ilike.*CMPAK*&select=uid,name,email,role&order=name.asc');
+    // Normalise company capitalisation on loaded activities
+    ALL_ACTS.forEach(a=>{ if(a.company) a._co=a.company.toUpperCase(); });
   } catch(e) {
     console.error('loadActivities error:', e);
   } finally {
@@ -974,12 +998,42 @@ async function loadActivities() {
 async function submitActivity() {
   if(!ACT_TYPE_SEL){SUBMIT_ST={type:'error',msg:'Please select an activity type.'};renderPage();return;}
   if(!ACT_TITLE.trim()){SUBMIT_ST={type:'error',msg:'Please enter a title.'};renderPage();return;}
+  const _isCmpak=(AUTH?.company||'').toUpperCase()==='CMPAK';
+  // For HW/ZTE assignments, require an agent to be selected
+  if(_isCmpak && ACT_ASSIGNEE_CO==='Huawei' && !ACT_ASSIGNEE_UID){SUBMIT_ST={type:'error',msg:'Please select a Huawei person to assign to.'};renderPage();return;}
+  if(_isCmpak && ACT_ASSIGNEE_CO==='ZTE' && !ACT_ASSIGNEE_UID){SUBMIT_ST={type:'error',msg:'Please select a ZTE person to assign to.'};renderPage();return;}
   SUBMITTING=true;SUBMIT_ST=null;renderPage();
   const pocUser = CMPAK_USERS.find(u=>u.uid===ACT_POC)||null;
-  const ok=await DB.post('activities',{id:crypto.randomUUID(),type:ACT_TYPE_SEL,title:ACT_TITLE,description:ACT_DESC,site_id:ACT_SITE,region:ACT_REGION,priority:ACT_PRIORITY,poc_uid:ACT_POC||null,poc_name:pocUser?pocUser.name:null,complaint_lat:ACT_COMPLAINT_LAT||null,complaint_lng:ACT_COMPLAINT_LNG||null,complaint_poc:ACT_COMPLAINT_POC||null,instructions_team:ACT_INSTR_TEAM||null,status:'open',created_by:AUTH.uid,created_by_name:AUTH.name,company:AUTH.company,created_at:new Date().toISOString(),assigned_to:null,assigned_to_name:null,assigned_at:null,completed_at:null,completion_remarks:null,log_file_url:null,log_file_name:null,log_received_at:null,final_report_url:null,final_report_name:null,final_report_at:null});
+  const targetCo = _isCmpak?(ACT_ASSIGNEE_CO||'LCC'):(AUTH?.company||'LCC');
+  // target_company is the canonical "which company handles this" field used for filtering
+  // Resolve assigned agent for HW/ZTE
+  let autoAssignUid=null, autoAssignName=null;
+  if(_isCmpak && ACT_ASSIGNEE_CO==='Huawei' && ACT_ASSIGNEE_UID){
+    const ag=HW_AGENTS.find(x=>x.uid===ACT_ASSIGNEE_UID);
+    autoAssignUid=ACT_ASSIGNEE_UID; autoAssignName=ag?ag.name||ag.email:ACT_ASSIGNEE_UID;
+  } else if(_isCmpak && ACT_ASSIGNEE_CO==='ZTE' && ACT_ASSIGNEE_UID){
+    const ag=ZTE_AGENTS.find(x=>x.uid===ACT_ASSIGNEE_UID);
+    autoAssignUid=ACT_ASSIGNEE_UID; autoAssignName=ag?ag.name||ag.email:ACT_ASSIGNEE_UID;
+  }
+  const now=new Date().toISOString();
+  const ok=await DB.post('activities',{
+    id:crypto.randomUUID(),type:ACT_TYPE_SEL,title:ACT_TITLE,description:ACT_DESC,
+    site_id:ACT_SITE,region:ACT_REGION,priority:ACT_PRIORITY,
+    poc_uid:ACT_POC||null,poc_name:pocUser?pocUser.name:null,
+    complaint_lat:ACT_COMPLAINT_LAT||null,complaint_lng:ACT_COMPLAINT_LNG||null,
+    complaint_poc:ACT_COMPLAINT_POC||null,instructions_team:ACT_INSTR_TEAM||null,
+    status:autoAssignUid?'assigned':'open',
+    created_by:AUTH.uid,created_by_name:AUTH.name,
+    company:targetCo,target_company:targetCo,created_at:now,
+    assigned_to:autoAssignUid,assigned_to_name:autoAssignName,
+    assigned_at:autoAssignUid?now:null,
+    completed_at:null,completion_remarks:null,
+    log_file_url:null,log_file_name:null,log_received_at:null,
+    final_report_url:null,final_report_name:null,final_report_at:null
+  });
   SUBMITTING=false;
-  SUBMIT_ST=ok?{type:'success',msg:'Activity created successfully.'}:{type:'error',msg:'Failed to create activity. Make sure the activities table exists in Supabase (see SQL below).'};
-  if(ok){ACT_TYPE_SEL='';ACT_TITLE='';ACT_DESC='';ACT_SITE='';ACT_REGION='';ACT_PRIORITY='Medium';ACT_POC='';ACT_COMPLAINT_LAT='';ACT_COMPLAINT_LNG='';ACT_COMPLAINT_POC='';ACT_INSTR_TEAM='';loadActivities();}
+  SUBMIT_ST=ok?{type:'success',msg:autoAssignUid?`Activity created and assigned to ${autoAssignName}.`:'Activity created successfully.'}:{type:'error',msg:'Failed to create activity.'};
+  if(ok){ACT_TYPE_SEL='';ACT_TITLE='';ACT_DESC='';ACT_SITE='';ACT_REGION='';ACT_PRIORITY='Medium';ACT_POC='';ACT_COMPLAINT_LAT='';ACT_COMPLAINT_LNG='';ACT_COMPLAINT_POC='';ACT_INSTR_TEAM='';ACT_ASSIGNEE_CO='LCC';ACT_ASSIGNEE_UID='';loadActivities();}
   renderPage();
 }
 async function exportActivitiesCSV(){
@@ -1010,7 +1064,9 @@ async function openReassignModal(actId){
   const a=ALL_ACTS.find(x=>x.id===actId);
   if(!a)return;
   if(!AGENTS.length){alert('No LCC agents loaded.');return;}
-  const agentOpts=AGENTS.map(ag=>`<option value="${ag.uid}">${escH(ag.name||ag.email)}</option>`).join('');
+  const _actCoForAssign=(m?.act?.company||'LCC').toUpperCase();
+  const _agentPoolForAssign=_actCoForAssign==='HUAWEI'?HW_AGENTS:_actCoForAssign==='ZTE'?ZTE_AGENTS:AGENTS;
+  const agentOpts=_agentPoolForAssign.map(ag=>`<option value="${ag.uid}">${escH(ag.name||ag.email)}</option>`).join('');
   const root=document.createElement('div');
   root.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
   root.innerHTML=`<div style="background:var(--surface);border-radius:12px;padding:24px;width:360px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.2)">
@@ -1469,18 +1525,196 @@ function initials(name){
 // ══════════════════════════════════════════════════════════════════════════════
 // BULK ACTIVITY UPLOAD
 // ══════════════════════════════════════════════════════════════════════════════
-const BULK_SAMPLE_ROWS = [
-  ['type','title','description','site_id','region','priority','poc_name','instructions_team'],
-  ['corporate_complaint','Sample Title','Description here','44001','Central-1','Medium','John Doe','Instructions for team'],
-  ['customer_complaint','Another Activity','More details','44002','Central-2','High','Jane Smith',''],
-];
-
 function downloadBulkSample(){
-  // Build CSV
-  const csv = BULK_SAMPLE_ROWS.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
-  const blob = new Blob([csv],{type:'text/csv'});
-  const a = document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download='bulk_activities_sample.csv'; a.click();
+  // Dynamically load SheetJS then generate XLSX with data validation dropdowns
+  if(window.XLSX){_doBulkXlsx();}
+  else{
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload=_doBulkXlsx; document.head.appendChild(s);
+  }
+}
+function _doBulkXlsx(){
+  // Build a real XLSX with working dropdowns using raw XML + JSZip
+  // SheetJS CE doesn't write dataValidations — so we build the zip manually
+  if(!window.JSZip){
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.onload=_doBulkXlsx; document.head.appendChild(s); return;
+  }
+
+  const typeList   = ACT_TYPES.map(t=>t.id);
+  const regionList = REGIONS;
+  const prioList   = ['Critical','High','Medium','Low'];
+
+  // We put valid values on a hidden "Lists" sheet so Excel can reference them
+  // as a named range — more reliable than inline quoted lists for long values
+  const LISTS_SHEET = 'Lists';
+  const ACTS_SHEET  = 'Activities';
+
+  // ── helpers ──────────────────────────────────────────────────
+  function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function colLetter(n){ let s=''; n++; while(n>0){s=String.fromCharCode(65+(n-1)%26)+s;n=Math.floor((n-1)/26);} return s; }
+  function cellRef(r,c){ return colLetter(c)+(r+1); }
+
+  // ── shared strings ────────────────────────────────────────────
+  const headers = ['type','title','description','site_id','region','priority','poc_name','complaint_lat','complaint_lng','instructions_team'];
+  // All strings go into shared strings table
+  const allStrings = [];
+  const strIdx = {};
+  function addStr(s){ s=String(s||''); if(strIdx[s]===undefined){strIdx[s]=allStrings.length;allStrings.push(s);} return strIdx[s]; }
+
+  headers.forEach(h=>addStr(h));
+  typeList.forEach(v=>addStr(v));
+  regionList.forEach(v=>addStr(v));
+  prioList.forEach(v=>addStr(v));
+  addStr('Column'); addStr('Valid Values');
+  typeList.concat(regionList,prioList).forEach(v=>addStr(v));
+
+  // ── Lists sheet rows ──────────────────────────────────────────
+  // Col A = types, Col B = regions, Col C = priorities
+  const maxRows = Math.max(typeList.length, regionList.length, prioList.length);
+  let listsRows = '';
+  // header row for lists
+  listsRows += `<row r="1"><c r="A1" t="s"><v>${addStr('type')}</v></c><c r="B1" t="s"><v>${addStr('region')}</v></c><c r="C1" t="s"><v>${addStr('priority')}</v></c></row>`;
+  for(let i=0;i<maxRows;i++){
+    const rn=i+2;
+    let row=`<row r="${rn}">`;
+    if(i<typeList.length)   row+=`<c r="A${rn}" t="s"><v>${addStr(typeList[i])}</v></c>`;
+    if(i<regionList.length) row+=`<c r="B${rn}" t="s"><v>${addStr(regionList[i])}</v></c>`;
+    if(i<prioList.length)   row+=`<c r="C${rn}" t="s"><v>${addStr(prioList[i])}</v></c>`;
+    row+=`</row>`;
+    listsRows+=row;
+  }
+
+  // ── Activities sheet rows ─────────────────────────────────────
+  let actsRows = `<row r="1">`;
+  headers.forEach((h,ci)=>{
+    actsRows+=`<c r="${cellRef(0,ci)}" t="s" s="1"><v>${addStr(h)}</v></c>`;
+  });
+  actsRows+=`</row>`;
+  // 50 blank data rows so user can type in
+  for(let r=1;r<=50;r++){
+    actsRows+=`<row r="${r+1}"></row>`;
+  }
+
+  // ── dataValidations XML ───────────────────────────────────────
+  // Uses sheet-scoped named ranges: Lists!$A$2:$A$N etc
+  const typeRows   = typeList.length;
+  const regionRows = regionList.length;
+  const prioRows   = prioList.length;
+  const dvXml = `<dataValidations count="3">
+    <dataValidation type="list" showErrorMessage="1" showInputMessage="1" errorTitle="Invalid value" error="Please select from the dropdown list." sqref="A2:A1001">
+      <formula1>Lists!$A$2:$A$${typeRows+1}</formula1>
+    </dataValidation>
+    <dataValidation type="list" showErrorMessage="1" showInputMessage="1" errorTitle="Invalid value" error="Please select a valid region." sqref="E2:E1001">
+      <formula1>Lists!$B$2:$B$${regionRows+1}</formula1>
+    </dataValidation>
+    <dataValidation type="list" showErrorMessage="1" showInputMessage="1" errorTitle="Invalid value" error="Please select Critical, High, Medium or Low." sqref="F2:F1001">
+      <formula1>Lists!$C$2:$C$${prioRows+1}</formula1>
+    </dataValidation>
+  </dataValidations>`;
+
+  // ── column widths ─────────────────────────────────────────────
+  const colsXml = `<cols>
+    <col min="1" max="1" width="28" customWidth="1"/>
+    <col min="2" max="2" width="36" customWidth="1"/>
+    <col min="3" max="3" width="40" customWidth="1"/>
+    <col min="4" max="4" width="14" customWidth="1"/>
+    <col min="5" max="5" width="18" customWidth="1"/>
+    <col min="6" max="6" width="14" customWidth="1"/>
+    <col min="7" max="7" width="22" customWidth="1"/>
+    <col min="8" max="8" width="16" customWidth="1"/>
+    <col min="9" max="9" width="16" customWidth="1"/>
+    <col min="10" max="10" width="30" customWidth="1"/>
+  </cols>`;
+
+  // ── shared strings XML ────────────────────────────────────────
+  const ssXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${allStrings.length}" uniqueCount="${allStrings.length}">
+${allStrings.map(s=>`<si><t xml:space="preserve">${esc(s)}</t></si>`).join('')}
+</sst>`;
+
+  // ── styles XML (header bold + fill) ──────────────────────────
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEFF6FF"/></patternFill></fill></fills>
+  <borders><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment horizontal="center"/></xf>
+  </cellXfs>
+</styleSheet>`;
+
+  // ── worksheet XMLs ────────────────────────────────────────────
+  const actsSheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews><sheetView tabSelected="1" workbookViewId="0"><selection activeCell="A2" sqref="A2"/></sheetView></sheetViews>
+  ${colsXml}
+  <sheetData>${actsRows}</sheetData>
+  ${dvXml}
+</worksheet>`;
+
+  const listsSheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>${listsRows}</sheetData>
+</worksheet>`;
+
+  // ── workbook XML ──────────────────────────────────────────────
+  const wbXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="${ACTS_SHEET}" sheetId="1" r:id="rId1"/>
+    <sheet name="${LISTS_SHEET}" sheetId="2" r:id="rId2" state="hidden"/>
+  </sheets>
+</workbook>`;
+
+  // ── relationships ─────────────────────────────────────────────
+  const wbRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+
+  const rootRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`;
+
+  // ── assemble zip ──────────────────────────────────────────────
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', contentTypesXml);
+  zip.file('_rels/.rels', rootRelsXml);
+  zip.file('xl/workbook.xml', wbXml);
+  zip.file('xl/_rels/workbook.xml.rels', wbRelsXml);
+  zip.file('xl/worksheets/sheet1.xml', actsSheetXml);
+  zip.file('xl/worksheets/sheet2.xml', listsSheetXml);
+  zip.file('xl/sharedStrings.xml', ssXml);
+  zip.file('xl/styles.xml', stylesXml);
+
+  zip.generateAsync({type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+    .then(blob=>{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='bulk_activities_sample.xlsx';
+      a.click();
+    });
 }
 
 function openBulkUpload(){
@@ -1503,11 +1737,11 @@ function openBulkUpload(){
       <div style="flex:1;overflow-y:auto;padding:24px">
         <!-- Step 1: Download sample -->
         <div style="background:#F0F7FF;border:1px solid #BFDBFE;border-radius:12px;padding:16px;margin-bottom:20px">
-          <div style="font-size:13px;font-weight:700;color:#1E40AF;margin-bottom:6px">Step 1 — Download Sample CSV</div>
-          <div style="font-size:12px;color:#374151;margin-bottom:10px">Fill in the sample file with your activities. Required columns: <b>type, title</b>. Optional: description, site_id, region, priority, poc_name, instructions_team.</div>
+          <div style="font-size:13px;font-weight:700;color:#1E40AF;margin-bottom:6px">Step 1 — Download Sample Excel (.xlsx)</div>
+          <div style="font-size:12px;color:#374151;margin-bottom:10px">Fill in the sample file with your activities. Required columns: <b>type, title</b>. Optional: description, site_id, region, priority, poc_name, complaint_lat, complaint_lng, instructions_team. Dropdown validation is pre-built in the file.</div>
           <div style="font-size:11px;color:#6B7280;margin-bottom:10px"><b>Valid types:</b> ${ACT_TYPES.map(t=>t.id).join(', ')}</div>
           <div style="font-size:11px;color:#6B7280;margin-bottom:10px"><b>Valid priorities:</b> Critical, High, Medium, Low</div>
-          <button class="btn btn-primary btn-sm" onclick="downloadBulkSample()" style="font-size:12px">⤓ Download Sample CSV</button>
+          <button class="btn btn-primary btn-sm" onclick="downloadBulkSample()" style="font-size:12px">⤓ Download Sample Excel</button>
         </div>
         <!-- Step 2: Upload -->
         <div style="margin-bottom:20px">
@@ -1545,31 +1779,67 @@ window._bulkRows = [];
 
 function handleBulkFile(input){
   const file = input.files[0]; if(!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e){
-    const text = e.target.result;
-    // Parse CSV
-    const lines = text.split(/\r?\n/).filter(l=>l.trim());
-    if(lines.length < 2){ alert('File must have a header row and at least one data row.'); return; }
-    const headers = lines[0].split(',').map(h=>h.trim().replace(/^"|"$/g,'').toLowerCase());
-    const rows = lines.slice(1).map(line=>{
-      // Handle quoted CSV
-      const vals=[]; let cur='',inQ=false;
-      for(let i=0;i<line.length;i++){
-        if(line[i]==='"'){inQ=!inQ;}
-        else if(line[i]===','&&!inQ){vals.push(cur.trim());cur='';}
-        else cur+=line[i];
-      }
-      vals.push(cur.trim());
-      const obj={};
-      headers.forEach((h,i)=>{ obj[h]=vals[i]||''; });
-      return obj;
-    }).filter(r=>r.type||r.title);
-
-    window._bulkRows = rows;
-    showBulkPreview(rows, headers);
-  };
-  reader.readAsText(file);
+  const isXlsx = file.name.match(/\.xlsx?$/i);
+  if(isXlsx){
+    // Load SheetJS to parse XLSX/XLS
+    function parseWithSheetJS(){
+      const XLSX=window.XLSX;
+      const reader = new FileReader();
+      reader.onload = function(e){
+        try{
+          const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+          // Use first sheet that is NOT named 'Lists' or 'Reference'
+          const sheetName = wb.SheetNames.find(n=>!['Lists','Reference'].includes(n)) || wb.SheetNames[0];
+          const ws = wb.Sheets[sheetName];
+          const aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+          if(!aoa||aoa.length<2){alert('File must have a header row and at least one data row.');return;}
+          const headers = aoa[0].map(h=>String(h||'').trim().toLowerCase());
+          const rows = aoa.slice(1)
+            .filter(row=>row.some(v=>String(v||'').trim()))  // skip blank rows
+            .map(row=>{
+              const obj={};
+              headers.forEach((h,i)=>{ obj[h]=String(row[i]||'').trim(); });
+              return obj;
+            }).filter(r=>r.type||r.title);
+          window._bulkRows = rows;
+          showBulkPreview(rows, headers);
+        }catch(err){
+          alert('Failed to read XLSX file: '+err.message);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+    if(window.XLSX){ parseWithSheetJS(); }
+    else{
+      const s=document.createElement('script');
+      s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      s.onload=parseWithSheetJS; document.head.appendChild(s);
+    }
+  } else {
+    // CSV path — unchanged
+    const reader = new FileReader();
+    reader.onload = function(e){
+      const text = e.target.result;
+      const lines = text.split(/\r?\n/).filter(l=>l.trim());
+      if(lines.length < 2){ alert('File must have a header row and at least one data row.'); return; }
+      const headers = lines[0].split(',').map(h=>h.trim().replace(/^"|"$/g,'').toLowerCase());
+      const rows = lines.slice(1).map(line=>{
+        const vals=[]; let cur='',inQ=false;
+        for(let i=0;i<line.length;i++){
+          if(line[i]==='"'){inQ=!inQ;}
+          else if(line[i]===','&&!inQ){vals.push(cur.trim());cur='';}
+          else cur+=line[i];
+        }
+        vals.push(cur.trim());
+        const obj={};
+        headers.forEach((h,i)=>{ obj[h]=vals[i]||''; });
+        return obj;
+      }).filter(r=>r.type||r.title);
+      window._bulkRows = rows;
+      showBulkPreview(rows, headers);
+    };
+    reader.readAsText(file);
+  }
   input.value='';
 }
 
@@ -1644,6 +1914,8 @@ async function executeBulkImport(){
         title: r.title.trim(),
         description: r.description||'',
         site_id: r.site_id||null,
+        complaint_lat: r.complaint_lat||null,
+        complaint_lng: r.complaint_lng||null,
         region: r.region||null,
         priority: ['Critical','High','Medium','Low'].includes(r.priority)?r.priority:'Medium',
         poc_name: r.poc_name||null,
@@ -1652,6 +1924,7 @@ async function executeBulkImport(){
         created_by: AUTH.uid,
         created_by_name: AUTH.name,
         company: AUTH.company,
+        target_company: AUTH.company,
         created_at: new Date().toISOString(),
         assigned_to: null, assigned_to_name: null,
       });
@@ -1724,18 +1997,21 @@ function renderSidebar() {
       <button class="nav-item active"><span class="ni">📊</span>Dashboard</button>
       <button class="nav-item" onclick="loadAnalytics()"><span class="ni">🔄</span>Refresh</button>`;
   } else {
+    const _isCmpakNav=(AUTH?.company||'').toUpperCase()==='CMPAK';
+    const _isCoordNav=AUTH?.isCoordinator&&_isCmpakNav;
+    function _navBtn(n){ return `<button class="nav-item ${AC_PAGE===n.id?'active':''}" onclick="actNav('${n.id}')"><span class="ni">${n.icon}</span>${n.label}${n.badge?`<span class="nav-badge">${n.badge}</span>`:''}</button>`; }
     sidebar.innerHTML=`
       <div class="sidebar-label">Activities</div>
-      ${[
-        {id:'dashboard',    icon:'📊', label:"Today's Dashboard"},
-        {id:'analytics_act',icon:'📈', label:'Analytics'},
-        {id:'new_activity', icon:'➕', label:'New Activity'},
-        {id:'my_activities',icon:'📋', label:'My Activities'},
-        {id:'all_activities',icon:'🌐',label:'All Activities'},
-        ...(AUTH?.isCoordinator?[{id:'assign',icon:'👤',label:'Assign Activities',badge:ASSIGN_BADGE}]:[])
-      ].map(n=>
-        `<button class="nav-item ${AC_PAGE===n.id?'active':''}" onclick="actNav('${n.id}')"><span class="ni">${n.icon}</span>${n.label}${n.badge?`<span class="nav-badge">${n.badge}</span>`:''}</button>`
-      ).join('')}`;
+      ${_navBtn({id:'dashboard',icon:'📊',label:"Today's Dashboard"})}
+      ${_navBtn({id:'new_activity',icon:'➕',label:'New Activity'})}
+      <div class="sidebar-label" style="margin-top:8px">My Work</div>
+      ${_navBtn({id:'my_activities',icon:'📋',label:'My Activities'})}
+      ${_navBtn({id:'all_activities',icon:'🌐',label:'All Activities'})}
+      ${_isCoordNav?_navBtn({id:'assign',icon:'👤',label:'Assign Activities',badge:ASSIGN_BADGE}):''}
+      <div class="sidebar-label" style="margin-top:8px">Analytics</div>
+      ${_navBtn({id:'analytics_act',icon:'📈',label:_isCmpakNav?'LCC Analytics':'Analytics'})}
+      ${_isCmpakNav?_navBtn({id:'analytics_hwzte',icon:'📡',label:'Huawei/ZTE Analytics'}):''}
+    `;
   }
 }
 
@@ -1758,6 +2034,7 @@ function render() {
   } else {
     if(AC_PAGE==='dashboard')          el.innerHTML=renderDashboard();
     else if(AC_PAGE==='analytics_act')  el.innerHTML=renderAnalyticsFull();
+    else if(AC_PAGE==='analytics_hwzte') el.innerHTML=renderHwZteAnalytics();
     else if(AC_PAGE==='new_activity')   el.innerHTML=renderNewActivity();
     else if(AC_PAGE==='my_activities')  el.innerHTML=renderMyActivities();
     else if(AC_PAGE==='all_activities') el.innerHTML=renderAllActivities();
@@ -1781,11 +2058,13 @@ function renderPage(){render();}
 function auditNav(p){
   A_PAGE=p;if(p==='history')loadAuditHistory();if(p==='approvals'){if(APPROVER_GRIDS.length===0)loadApproverGrids();else loadPending();}render();
 }
-function actNav(p){AC_PAGE=p;if(p==='analytics_act'){if(!AN_DATA&&!AN_LOAD)loadAnalytics();render();}else{loadActivities();}}
+function actNav(p){AC_PAGE=p;if(p==='analytics_act'){if(!AN_DATA&&!AN_LOAD)loadAnalytics();render();}else if(p==='analytics_hwzte'){if((AUTH?.company||'').toUpperCase()==='CMPAK'){if(!HW_ZTE_AN_DATA&&!HW_ZTE_AN_LOAD)loadHwZteAnalytics();render();}else{AC_PAGE='dashboard';render();}}else{loadActivities();}}
 function analyticsNav(p){AN_PAGE=p;render();}
 
 let AN_DATA = null;
 let AN_LOAD = false;
+let HW_ZTE_AN_DATA = null;
+let HW_ZTE_AN_LOAD = false;
 
 async function loadAnalytics(){
   if(AN_LOAD) return;
@@ -1794,7 +2073,9 @@ async function loadAnalytics(){
     // Load all activities for analytics (no limit - use pagination)
     let all=[], offset=0, pageSize=1000;
     while(true){
-      const page = await DB.get('/rest/v1/activities?order=created_at.desc&limit='+pageSize+'&offset='+offset);
+      // LCC analytics: always show LCC-targeted activities only
+      const _anCoF='&or=(target_company.ilike.LCC,and(target_company.is.null,company.ilike.LCC))';
+      const page = await DB.get('/rest/v1/activities?order=created_at.desc'+_anCoF+'&limit='+pageSize+'&offset='+offset);
       if(!page||!page.length) break;
       all=all.concat(page);
       if(page.length<pageSize) break;
@@ -1989,24 +2270,69 @@ function filterApprTable(q) {
 }
 
 
+// Dashboard company tab state
+window._dashTab = window._dashTab || 'all';
+
+function coTag(a){
+  const co=(a.target_company||a.company||'').toUpperCase();
+  const cfg={HUAWEI:{bg:'#FEE2E2',col:'#991B1B',lbl:'Huawei'},ZTE:{bg:'#D1FAE5',col:'#065F46',lbl:'ZTE'},LCC:{bg:'#DBEAFE',col:'#1E40AF',lbl:'LCC'}};
+  const s=cfg[co]||{bg:'#F3F4F6',col:'#6B7280',lbl:a.target_company||a.company||'—'};
+  return `<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:${s.bg};color:${s.col}">${s.lbl}</span>`;
+}
+
 function renderDashboard(){
   if(ACT_LOAD)return`<div class="empty-state"><div class="ei">⏳</div><p>Loading…</p></div>`;
-  const isCoordinator=AUTH&&AUTH.isCoordinator;
+  const isCoordinator=AUTH&&AUTH.isCoordinator&&(AUTH?.company||'').toUpperCase()==='CMPAK';
+  const isCmpak=(AUTH?.company||'').toUpperCase()==='CMPAK';
   const myUid = AUTH ? AUTH.uid : null;
 
-  // Active activities: assigned/accepted/open
-  const active = ALL_ACTS.filter(a=>a.assigned_to && ['assigned','accepted','open'].includes(a.status));
   // My pending = activities assigned to ME that need acceptance
   const myPending = ALL_ACTS.filter(a => a.assigned_to === myUid && a.status === 'assigned');
+
+  // Filter active by selected company tab
+  const activeAll = ALL_ACTS.filter(a=>a.assigned_to && ['assigned','accepted','open'].includes(a.status));
+  function tabFilter(acts){
+    if(!isCmpak||window._dashTab==='all') return acts;
+    return acts.filter(a=>(a.target_company||a.company||'').toUpperCase()===window._dashTab.toUpperCase());
+  }
+  const active = tabFilter(activeAll);
+
+  // KPI counts per company (for CMPAK)
+  function coCnt(co){ return ALL_ACTS.filter(a=>(a.target_company||a.company||'').toUpperCase()===co.toUpperCase()&&['assigned','accepted','open'].includes(a.status)).length; }
+
+  const tabs = isCmpak ? ['all','LCC','Huawei','ZTE'] : [];
+  const tabColors = {all:'#6366F1',LCC:'#1E40AF',Huawei:'#DC2626',ZTE:'#059669'};
+  const tabBg    = {all:'#EEF2FF',LCC:'#DBEAFE',Huawei:'#FEE2E2',ZTE:'#D1FAE5'};
 
   return`<div>
 <div class="page-hdr">
   <div><div class="page-title">📊 Activity Dashboard</div>
-  <div class="page-sub">Active: ${active.length} · Pending your acceptance: ${myPending.length}</div></div>
+  <div class="page-sub">Active: ${activeAll.length}${myPending.length?` · ⚠️ ${myPending.length} pending your acceptance`:''}</div></div>
   <button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button>
 </div>
+
+${isCmpak?`
+<!-- Company KPI cards -->
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+  ${[{co:'all',label:'All',color:'#6366F1',bg:'#EEF2FF'},{co:'LCC',label:'LCC',color:'#1E40AF',bg:'#DBEAFE'},{co:'Huawei',label:'Huawei',color:'#DC2626',bg:'#FEE2E2'},{co:'ZTE',label:'ZTE',color:'#059669',bg:'#D1FAE5'}].map(({co,label,color,bg})=>{
+    const cnt=co==='all'?activeAll.length:coCnt(co);
+    const tot=co==='all'?ALL_ACTS.length:ALL_ACTS.filter(a=>(a.target_company||a.company||'').toUpperCase()===co.toUpperCase()).length;
+    const done=co==='all'?ALL_ACTS.filter(a=>a.status==='completed').length:ALL_ACTS.filter(a=>(a.target_company||a.company||'').toUpperCase()===co.toUpperCase()&&a.status==='completed').length;
+    return `<div onclick="window._dashTab='${co}';renderPage()" style="cursor:pointer;background:#fff;border-radius:12px;padding:16px 18px;border:2px solid ${window._dashTab===co?color:bg};box-shadow:0 1px 4px rgba(0,0,0,.06);transition:all .15s">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${color};margin-bottom:6px">${label}</div>
+      <div style="font-size:26px;font-weight:800;color:#111827;line-height:1">${cnt}</div>
+      <div style="font-size:11px;color:#6B7280;margin-top:3px">active · ${done}/${tot} done</div>
+    </div>`;
+  }).join('')}
+</div>
+
+<!-- Tab pills -->
+<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+  ${tabs.map(t=>`<button onclick="window._dashTab='${t}';renderPage()" style="padding:6px 16px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:none;background:${window._dashTab===t?tabColors[t]:'#F3F4F6'};color:${window._dashTab===t?'#fff':'#6B7280'};transition:all .15s">${t==='all'?'All Companies':t}</button>`).join('')}
+</div>`:''}
+
 ${myPending.length>0?`
-<div class="card" style="border:2px solid #F59E0B;background:#FFFBEB">
+<div class="card" style="border:2px solid #F59E0B;background:#FFFBEB;margin-bottom:16px">
   <div style="font-weight:700;font-size:14px;color:#92400E;margin-bottom:12px">⚠️ ${myPending.length} activit${myPending.length===1?'y':'ies'} awaiting your acceptance</div>
   <div style="overflow-x:auto"><table class="data-table">
   <thead><tr><th>Type</th><th>Title</th><th>Region</th><th>Priority</th><th>Assigned By</th><th>Instructions</th><th>Action</th></tr></thead>
@@ -2024,11 +2350,13 @@ ${myPending.length>0?`
   </tr>`; }).join('')}
   </tbody></table></div>
 </div>`:``}
-${!active.length?`<div class="empty-state"><div class="ei">✅</div><p>No active assigned activities.</p></div>`:`
+
+${!active.length?`<div class="empty-state"><div class="ei">✅</div><p>No active activities${isCmpak&&window._dashTab!=='all'?' for '+window._dashTab:''}.</p></div>`:`
 <div class="card"><div style="overflow-x:auto"><table class="data-table">
 <thead><tr>
   <th>Type</th><th>Title</th><th>Region</th><th>Site</th>
   <th>Priority</th><th>Status</th><th>Assigned To</th>
+  ${isCmpak?'<th>Company</th>':''}
   <th>CMPAK POC</th><th>Created</th><th></th>
 </tr></thead>
 <tbody>${active.map((a,i)=>{const t=actTypeLabel(a.type);const idx=ALL_ACTS.indexOf(a);return`<tr>
@@ -2039,6 +2367,7 @@ ${!active.length?`<div class="empty-state"><div class="ei">✅</div><p>No active
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
 <td>${statusBadge(a.status||'open')}</td>
 <td style="font-size:12px;color:var(--muted)">${escH(a.assigned_to_name||'Unassigned')}</td>
+${isCmpak?`<td>${coTag(a)}</td>`:''}
 <td style="font-size:12px;color:var(--muted)">${escH(a.poc_name||'—')}</td>
 <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
 <td style="white-space:nowrap">
@@ -2132,10 +2461,27 @@ function showToast(msg, type='success'){
 
 function renderNewActivity(){
   const cmpakOpts = CMPAK_USERS.map(u=>`<option value="${escH(u.uid)}" ${ACT_POC===u.uid?'selected':''}>${escH(u.name||u.email)}</option>`).join('');
+  const _showCoSel=(AUTH?.company||'').toUpperCase()==='CMPAK';
+  const _hwOpts=HW_AGENTS.map(u=>`<option value="${escH(u.uid)}" ${ACT_ASSIGNEE_UID===u.uid?'selected':''}>${escH(u.name||u.email)}</option>`).join('');
+  const _zteOpts=ZTE_AGENTS.map(u=>`<option value="${escH(u.uid)}" ${ACT_ASSIGNEE_UID===u.uid?'selected':''}>${escH(u.name||u.email)}</option>`).join('');
+  const _agentDrop=(ACT_ASSIGNEE_CO==='Huawei'&&_showCoSel)
+    ?`<div style="width:100%;margin-top:10px"><label style="font-size:11px;font-weight:700;color:#92400E;text-transform:uppercase;letter-spacing:.5px">Assign to Huawei Person <span style="color:var(--danger)">*</span></label><select style="width:100%;margin-top:5px;padding:8px 12px;border:1.5px solid #FED7AA;border-radius:8px;font-size:13px" onchange="ACT_ASSIGNEE_UID=this.value"><option value="">— Select Huawei Person —</option>${_hwOpts}</select></div>`
+    :(ACT_ASSIGNEE_CO==='ZTE'&&_showCoSel)
+    ?`<div style="width:100%;margin-top:10px"><label style="font-size:11px;font-weight:700;color:#92400E;text-transform:uppercase;letter-spacing:.5px">Assign to ZTE Person <span style="color:var(--danger)">*</span></label><select style="width:100%;margin-top:5px;padding:8px 12px;border:1.5px solid #FED7AA;border-radius:8px;font-size:13px" onchange="ACT_ASSIGNEE_UID=this.value"><option value="">— Select ZTE Person —</option>${_zteOpts}</select></div>`
+    :'';
+  const coSelector=_showCoSel?`<div style="padding:12px 16px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:12px;font-weight:700;color:#92400E">Assign to:</span>
+        ${['LCC','Huawei','ZTE'].map(co=>`<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px;font-weight:700;color:${ACT_ASSIGNEE_CO===co?'#1D4ED8':'#374151'}">
+          <input type="radio" name="actco" value="${co}" ${ACT_ASSIGNEE_CO===co?'checked':''} onchange="ACT_ASSIGNEE_CO=this.value;ACT_ASSIGNEE_UID='';renderPage()" style="accent-color:#2563EB;width:14px;height:14px">
+          ${co}</label>`).join('')}
+      </div>
+      ${_agentDrop}
+    </div>`:'';
   return`<div>
 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px"><div class="page-title">New Activity</div><button class="btn btn-outline btn-sm" onclick="openBulkUpload()" style="font-size:12px">⬆ Bulk Upload</button></div>
 <div class="page-sub">Create a new field activity for tracking</div>
-${SUBMIT_ST?`<div class="alert alert-${SUBMIT_ST.type==='success'?'success':'error'}">${escH(SUBMIT_ST.msg)}</div>`:''}
+${coSelector}${SUBMIT_ST?`<div class="alert alert-${SUBMIT_ST.type==='success'?'success':'error'}">${escH(SUBMIT_ST.msg)}</div>`:''}
 <div class="card" style="margin-bottom:18px">
 <div class="card-header"><span class="card-title">Activity Type</span></div>
 <div class="card-body">
@@ -2202,15 +2548,30 @@ ${!MY_ACTS.length?`<div class="empty-state"><div class="ei">📋</div><p>No acti
 </div>`;}
 
 // ── ACTIVITIES: ALL ───────────────────────────────────────────
+// All Activities company tab state
+window._allActTab = window._allActTab || 'all';
+
 function renderAllActivities(){
   if(ACT_LOAD)return`<div class="empty-state"><div class="ei">⏳</div><p>Loading…</p></div>`;
-  const filtered=ALL_ACTS;
+  const isCmpak=(AUTH?.company||'').toUpperCase()==='CMPAK';
+  function allTabFilter(acts){
+    if(!isCmpak||window._allActTab==='all') return acts;
+    return acts.filter(a=>(a.target_company||a.company||'').toUpperCase()===window._allActTab.toUpperCase());
+  }
+  const filtered=allTabFilter(ALL_ACTS);
+  const tabColors={all:'#6366F1',LCC:'#1E40AF',Huawei:'#DC2626',ZTE:'#059669'};
   return`<div>
 <div class="page-hdr"><div><div class="page-title">All Activities</div><div class="page-sub">Activities across all team members</div></div>
 <div style="display:flex;gap:8px">
 <button class="btn btn-outline btn-sm" onclick="loadActivities()">🔄 Refresh</button>
 <button class="btn btn-outline btn-sm" onclick="exportActivitiesCSV()">⤓ CSV Export</button>
 </div></div>
+${isCmpak?`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+  ${['all','LCC','Huawei','ZTE'].map(t=>{
+    const cnt=t==='all'?ALL_ACTS.length:ALL_ACTS.filter(a=>(a.target_company||a.company||'').toUpperCase()===t.toUpperCase()).length;
+    return `<button onclick="window._allActTab='${t}';renderPage()" style="padding:6px 16px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:none;background:${window._allActTab===t?tabColors[t]:'#F3F4F6'};color:${window._allActTab===t?'#fff':'#6B7280'};transition:all .15s">${t==='all'?'All':t} <span style="opacity:.7">(${cnt})</span></button>`;
+  }).join('')}
+</div>`:''}
 <div class="form-group" style="margin-bottom:16px">
   <input id="act-search-inp" type="text" placeholder="🔍  Search by title, region, type, agent, POC…" 
     style="max-width:480px"
@@ -2218,7 +2579,7 @@ function renderAllActivities(){
 </div>
 ${!filtered.length?`<div class="empty-state"><div class="ei">📋</div><p>No activities yet.</p></div>`:`
 <div class="card" style="overflow-x:auto"><table class="data-table" style="min-width:900px">
-<thead><tr><th>Type</th><th>Title</th><th>Region</th><th>POC</th><th>Assigned To</th><th>Priority</th><th>Status</th><th>📁 Log</th><th>📄 Report</th><th>Date</th><th></th></tr></thead>
+<thead><tr><th>Type</th><th>Title</th><th>Region</th><th>POC</th><th>Assigned To</th><th>Priority</th><th>Status</th><th>Company</th><th>📁 Log</th><th>📄 Report</th><th>Date</th><th></th></tr></thead>
 <tbody id='act-tbody'>${filtered.map((a,i)=>{
   const t=actTypeLabel(a.type);
   const idx=ALL_ACTS.indexOf(a);
@@ -2236,6 +2597,7 @@ ${!filtered.length?`<div class="empty-state"><div class="ei">📋</div><p>No act
 <td style="font-size:12px">${escH(a.assigned_to_name||'—')}</td>
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
 <td>${statusBadge(a.status||'open')}</td>
+<td><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:${(a.target_company||a.company||'').toUpperCase()==='HUAWEI'?'#FEE2E2':(a.target_company||a.company||'').toUpperCase()==='ZTE'?'#D1FAE5':'#DBEAFE'};color:${(a.target_company||a.company||'').toUpperCase()==='HUAWEI'?'#991B1B':(a.target_company||a.company||'').toUpperCase()==='ZTE'?'#065F46':'#1E40AF'}">${escH(a.target_company||a.company||'—')}</span></td>
 <td>${logStatus}</td>
 <td>${repStatus}</td>
 <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
@@ -2461,12 +2823,16 @@ function renderModal(){
   }
 
   if(m.type==='assign'){
+    const _assignAct=ALL_ACTS.find(x=>x.id===m.actId)||{};
+    const _assignCo=((_assignAct.company||'LCC').toUpperCase());
+    const _assignPool=_assignCo==='HUAWEI'?HW_AGENTS:_assignCo==='ZTE'?ZTE_AGENTS:AGENTS;
+    const _assignLabel=_assignCo==='HUAWEI'?'Huawei':_assignCo==='ZTE'?'ZTE':'LCC';
     mc.innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:420px">
 <div class="modal-hdr"><h3>👤 Assign Activity</h3><button class="btn-x" onclick="closeModal()">✕</button></div>
 <div class="modal-body">
-<p style="font-size:13px;color:var(--muted);margin-bottom:16px">Select an LCC agent to assign this activity to:</p>
-${!AGENTS.length?`<p style="color:var(--muted);font-size:13px">No LCC agents found.</p>`:
-AGENTS.map(ag=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+<p style="font-size:13px;color:var(--muted);margin-bottom:16px">Select a <b>${_assignLabel}</b> person to assign this activity to:</p>
+${!_assignPool.length?`<p style="color:var(--muted);font-size:13px">No ${_assignLabel} agents found.</p>`:
+_assignPool.map(ag=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
 <div><b style="font-size:13px">${escH(ag.name||ag.email)}</b><div style="font-size:11px;color:var(--muted)">${escH(ag.email||'')}</div></div>
 <button class="btn btn-primary btn-sm" onclick="assignActivity('${m.actId}','${ag.uid}','${escH(ag.name||ag.email)}')">Assign</button>
 </div>`).join('')}
@@ -2552,7 +2918,9 @@ ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Ed
 
   if(m.type==='edit_activity'){
     const a=m.act;
-    const agentOpts=AGENTS.map(ag=>`<option value="${ag.uid}" ${a.assigned_to===ag.uid?'selected':''}>${escH(ag.name||ag.email)}</option>`).join('');
+    const _editActCo=(a.company||'LCC').toUpperCase();
+    const _editPool=_editActCo==='HUAWEI'?HW_AGENTS:_editActCo==='ZTE'?ZTE_AGENTS:AGENTS;
+    const agentOpts=_editPool.map(ag=>`<option value="${ag.uid}" ${a.assigned_to===ag.uid?'selected':''}>${escH(ag.name||ag.email)}</option>`).join('');
     const pocOpts=CMPAK_USERS.map(u=>`<option value="${u.uid}" ${a.poc_uid===u.uid?'selected':''}>${escH(u.name||u.email)}</option>`).join('');
     const typeOpts=ACT_TYPES.map(t=>`<option value="${t.id}" ${a.type===t.id?'selected':''}>${t.icon} ${t.label}</option>`).join('');
     const statOpts=['open','assigned','completed','cancelled','onhold','reassigned'].map(s=>`<option value="${s}" ${a.status===s?'selected':''}>${s}</option>`).join('');
@@ -3234,7 +3602,7 @@ function lmClearSurveyDots(){
 // ── Show/hide tab & switchModule ──────────────────────────────────────
 function showLiveMapTabIfCoordinator(){
   const btn=document.getElementById('mod-livemap');
-  if(btn&&AUTH&&AUTH.isCoordinator) btn.style.display='';
+  if(btn&&AUTH&&AUTH.isCoordinator&&(AUTH?.company||'').toUpperCase()==='CMPAK') btn.style.display='';
 }
 
 
@@ -3476,7 +3844,7 @@ function renderAnalyticsFull(){
               <div style="font-size:11px;font-weight:700;color:${col}">${cnt}</div>
               <div style="width:100%;height:${barH}px;background:${col};border-radius:4px 4px 0 0;min-height:4px;transition:height .4s"></div>
               <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${col};text-align:center">${p}</div>
-              <div style="font-size:9px;color:#9CA3AF;text-align:center">${r2}%</div>
+              <div style="font-size:9px;color:#9CA3AF;text-align:center">${r2}% done</div>
             </div>`;
           }).join('')}
         </div>`
@@ -3489,11 +3857,13 @@ function renderAnalyticsFull(){
             const barH=d.total>0?Math.round((d.total/maxType)*110):4;
             const pct=d.total>0?((d.completed/d.total)*100).toFixed(0):0;
             const name=anTypeName(type);
-            return `<div style="flex:1;min-width:44px;display:flex;flex-direction:column;align-items:center;gap:4px">
+            // Short label: strip emoji, truncate to 2 words max
+            const shortLabel = name.replace(/^\S+\s/,'').split(' ').slice(0,2).join(' ');
+            return `<div style="flex:1;min-width:52px;max-width:90px;display:flex;flex-direction:column;align-items:center;gap:3px">
               <div style="font-size:11px;font-weight:700;color:${col}">${d.total}</div>
               <div style="width:100%;height:${barH}px;background:${col};border-radius:4px 4px 0 0;min-height:4px;transition:height .4s" title="${name}"></div>
-              <div style="font-size:8px;color:#374151;text-align:center;max-width:56px;line-height:1.2;word-break:break-word" title="${name}">${name.replace(/^[^\s]+ /,'')}</div>
-              <div style="font-size:9px;color:#9CA3AF;text-align:center">${pct}%</div>
+              <div style="font-size:8px;color:#374151;text-align:center;line-height:1.3;width:100%;padding:0 2px;word-break:break-word" title="${name}">${name.replace(/^\S+\s/,'').split(' ').slice(0,2).join(' ')}</div>
+              <div style="font-size:8px;color:#9CA3AF;text-align:center">${pct}% done</div>
             </div>`;
           }).join('')}
         </div>`
@@ -3552,9 +3922,9 @@ function renderAnalyticsFull(){
         const resMonths=Object.keys(resMap).sort();
         const resVals=resMonths.map(d=>(resMap[d].sum/resMap[d].cnt));
         const maxRes=Math.max(...resVals,1);
-        const RW=580, RH=140, PAD=30;
+        const RW=580, RH=140, PAD=40, RPAD=45;
         if(!resMonths.length) return '<div style="color:#9CA3AF;font-size:13px;padding:20px;text-align:center">No completed activities yet.</div>';
-        const chartW=RW-PAD-10, chartH=RH-20;
+        const chartW=RW-PAD-RPAD, chartH=RH-20;
         const xPos=i=>resMonths.length>1?(i/(resMonths.length-1))*chartW+PAD:RW/2;
         const yPos=i=>chartH-Math.round((resVals[i]/maxRes)*(chartH-20))+10;
         const pts=resMonths.map((_,i)=>`${xPos(i)},${yPos(i)}`);
@@ -3587,9 +3957,39 @@ function renderAnalyticsFull(){
           ${dotsSvg}
           ${labels}
         </svg></div>
-        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:14px">
-          ${resMonths.slice().reverse().slice(0,10).map((m,i)=>`<div style="text-align:center;min-width:64px"><div style="font-size:10px;color:#6B7280">${m}</div><div style="font-size:14px;font-weight:700;color:#8B5CF6">${resVals[resMonths.length-1-i].toFixed(1)}d</div></div>`).join('')}
-        </div>`;
+        `;  // legend strip removed
+      })()}`
+    )}
+
+
+    <!-- ── Avg Aging by Category ── -->
+    ${SECTION('⏱ Avg Aging by Category',
+      `${(()=>{
+        // Only completed activities for meaningful resolution time
+        const catAging={};
+        data.filter(a=>a.status==='completed'&&a.created_at&&a.completed_at).forEach(a=>{
+          const t=a.type||'Unknown';
+          if(!catAging[t])catAging[t]={sum:0,cnt:0};
+          catAging[t].sum+=(new Date(a.completed_at)-new Date(a.created_at))/(1000*3600*24);
+          catAging[t].cnt++;
+        });
+        const catEntries=Object.entries(catAging).map(([type,d])=>({type,avg:d.sum/d.cnt,cnt:d.cnt})).sort((a,b)=>b.avg-a.avg);
+        if(!catEntries.length) return '<div style="color:#9CA3AF;font-size:13px;padding:16px;text-align:center">No completed activities yet.</div>';
+        const maxAvg=catEntries[0].avg||1;
+        const CAT_COLORS=['#8B5CF6','#EF4444','#F59E0B','#10B981','#3B82F6','#EC4899','#14B8A6','#6366F1','#F97316'];
+        return catEntries.map(({type,avg,cnt},i)=>{
+          const col=CAT_COLORS[i%CAT_COLORS.length];
+          const pct=maxAvg>0?Math.round((avg/maxAvg)*100):0;
+          return `<div style="margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <span style="font-size:12px;font-weight:600;color:#374151">${anTypeName(type)}</span>
+              <span style="font-size:12px;font-weight:700;color:${col}">${avg.toFixed(1)}d <span style="font-size:10px;color:#9CA3AF;font-weight:400">(${cnt} resolved)</span></span>
+            </div>
+            <div style="height:10px;background:#F3F4F6;border-radius:5px;overflow:hidden">
+              <div style="height:100%;width:${pct}%;background:${col};border-radius:5px;transition:width .5s"></div>
+            </div>
+          </div>`;
+        }).join('');
       })()}`
     )}
 
@@ -4262,6 +4662,209 @@ function exportAttCSV() {
   anchor.download = `attendance_${date}.csv`;
   anchor.click();
 }
+// ════════════════════════════════════════════════════════════════
+// HUAWEI / ZTE ANALYTICS
+// ════════════════════════════════════════════════════════════════
+async function loadHwZteAnalytics(){
+  if(HW_ZTE_AN_LOAD) return;
+  HW_ZTE_AN_LOAD=true; if(MODULE==='activity') render();
+  try {
+    let all=[], offset=0, pageSize=1000;
+    while(true){
+      const hwPage  = await DB.get('/rest/v1/activities?order=created_at.desc&or=(target_company.ilike.Huawei,and(target_company.is.null,company.ilike.Huawei))&limit='+pageSize+'&offset='+offset);
+      const ztePage = await DB.get('/rest/v1/activities?order=created_at.desc&or=(target_company.ilike.ZTE,and(target_company.is.null,company.ilike.ZTE))&limit='+pageSize+'&offset='+offset);
+      const page = [...(hwPage||[]), ...(ztePage||[])];
+      if(!page||!page.length) break;
+      all=all.concat(page);
+      if(page.length<pageSize) break;
+      offset+=pageSize;
+    }
+    // normalise company field capitalisation
+    all.forEach(a=>{ if(a.company) a.company=a.company.toUpperCase(); });
+    HW_ZTE_AN_DATA = all;
+  } catch(e){ console.error('loadHwZteAnalytics error:',e); HW_ZTE_AN_DATA=[]; }
+  HW_ZTE_AN_LOAD=false; if(MODULE==='activity') render();
+}
+
+function renderHwZteAnalytics(){
+  if((AUTH?.company||'').toUpperCase()!=='CMPAK') return `<div class="empty-state"><div class="ei">🔒</div><p>Access restricted.</p></div>`;
+  if(HW_ZTE_AN_LOAD) return `<div class="empty-state"><div class="ei">⏳</div><p>Loading analytics…</p></div>`;
+  if(!HW_ZTE_AN_DATA) return `<div class="empty-state"><div class="ei">📡</div><p><button class="btn btn-primary" onclick="loadHwZteAnalytics()">Load Huawei / ZTE Analytics</button></p></div>`;
+  const data = HW_ZTE_AN_DATA || [];
+  if(!data.length) return `<div class="empty-state"><div class="ei">📡</div><p>No Huawei / ZTE activity data found.</p></div>`;
+
+  const hwData  = data.filter(a=>a.company==='HUAWEI');
+  const zteData = data.filter(a=>a.company==='ZTE');
+
+  const now = Date.now();
+  function stats(d){
+    const total     = d.length;
+    const completed = d.filter(a=>a.status==='completed').length;
+    const active    = d.filter(a=>['open','assigned','accepted'].includes(a.status)).length;
+    const pending   = d.filter(a=>a.status==='open'&&!a.assigned_to).length;
+    const cancelled = d.filter(a=>['cancelled','onhold'].includes(a.status)).length;
+    const rejected  = d.filter(a=>a.status==='rejected').length;
+    const rate      = total>0?((completed/total)*100).toFixed(1):'0.0';
+    const avgAging  = d.length?(d.reduce((s,a)=>{
+      const start=new Date(a.created_at||now).getTime();
+      const end=a.completed_at?new Date(a.completed_at).getTime():now;
+      return s+(end-start)/(1000*3600*24);
+    },0)/d.length).toFixed(1):'—';
+    const sevenDaysAgo=now-7*24*3600*1000;
+    const recent=d.filter(a=>new Date(a.created_at).getTime()>sevenDaysAgo);
+    const recentDone=d.filter(a=>a.completed_at&&new Date(a.completed_at).getTime()>sevenDaysAgo);
+    return {total,completed,active,pending,cancelled,rejected,rate,avgAging,recent:recent.length,recentDone:recentDone.length};
+  }
+
+  function agentTable(d, label, color){
+    const byAgent={};
+    d.filter(a=>a.assigned_to_name).forEach(a=>{
+      const n=a.assigned_to_name;
+      if(!byAgent[n])byAgent[n]={total:0,completed:0,open:0,days:[]};
+      byAgent[n].total++;
+      if(a.status==='completed')byAgent[n].completed++;
+      else if(['open','assigned','accepted'].includes(a.status))byAgent[n].open++;
+      const s=new Date(a.created_at||now).getTime(), e=a.completed_at?new Date(a.completed_at).getTime():now;
+      byAgent[n].days.push((e-s)/(1000*3600*24));
+    });
+    const entries=Object.entries(byAgent).sort((a,b)=>b[1].total-a[1].total);
+    entries.forEach(([,d])=>{d.avgDays=d.days.length?(d.days.reduce((a,b)=>a+b,0)/d.days.length).toFixed(1):'—';});
+    if(!entries.length) return `<div style="color:#9CA3AF;font-size:13px;padding:10px 0">No assigned activities found for ${label}.</div>`;
+    return `<div style="overflow-x:auto"><table class="data-table" style="font-size:12px">
+      <thead><tr><th>Person</th><th>Total</th><th>Done</th><th>Active</th><th>Avg Days</th><th>Rate</th></tr></thead>
+      <tbody>${entries.map(([name,d])=>{
+        const pct=d.total>0?((d.completed/d.total)*100).toFixed(0):0;
+        return `<tr>
+          <td style="font-weight:600"><div style="display:flex;align-items:center;gap:6px">
+            <div style="width:22px;height:22px;border-radius:50%;background:${color};color:#fff;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;flex-shrink:0">${name.slice(0,1).toUpperCase()}</div>
+            ${escH(name)}</div></td>
+          <td style="font-weight:700">${d.total}</td>
+          <td style="color:#059669;font-weight:600">${d.completed}</td>
+          <td style="color:#2563EB;font-weight:600">${d.open}</td>
+          <td style="color:#6B7280">${d.avgDays}</td>
+          <td><div style="height:5px;background:#F3F4F6;border-radius:3px;width:60px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:4px"><div style="height:100%;width:${pct}%;background:${color}"></div></div><span style="font-size:10px;color:#6B7280">${pct}%</span></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>`;
+  }
+
+  function typeBreakdown(d){
+    const byType={};
+    d.forEach(a=>{const t=a.type||'Unknown';if(!byType[t])byType[t]={total:0,completed:0};byType[t].total++;if(a.status==='completed')byType[t].completed++;});
+    const entries=Object.entries(byType).sort((a,b)=>b[1].total-a[1].total);
+    const max=entries[0]?.[1]?.total||1;
+    const COLORS=['#6366F1','#F59E0B','#10B981','#EF4444','#3B82F6','#8B5CF6','#EC4899','#14B8A6','#F97316'];
+    return entries.map(([type,d],i)=>anBar(anTypeName(type),d.total,max,COLORS[i%COLORS.length])).join('');
+  }
+
+  function kpiRow(s, color){
+    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+      ${anKv('Total',s.total.toLocaleString(),'All time',color)}
+      ${anKv('Completed',s.completed.toLocaleString(),s.rate+'% rate','#10B981')}
+      ${anKv('Active',s.active.toLocaleString(),'In progress','#3B82F6')}
+      ${anKv('Pending',s.pending.toLocaleString(),'Unassigned','#F59E0B')}
+      ${anKv('Avg Aging',s.avgAging+' days','Time to resolve','#8B5CF6')}
+      ${anKv('Last 7 Days',s.recent.toLocaleString(),s.recentDone+' completed','#EC4899')}
+    </div>`;
+  }
+
+  const hw=stats(hwData), zte=stats(zteData), all=stats(data);
+
+  return `<div style="padding:0 2px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div>
+        <div style="font-size:19px;font-weight:800;color:#111827">📡 Huawei / ZTE Analytics</div>
+        <div style="font-size:13px;color:#6B7280;margin-top:2px">${data.length.toLocaleString()} total activities · Huawei: ${hwData.length} · ZTE: ${zteData.length}</div>
+      </div>
+      <button class="btn btn-outline btn-sm" onclick="HW_ZTE_AN_DATA=null;HW_ZTE_AN_LOAD=false;loadHwZteAnalytics()">🔄 Refresh</button>
+    </div>
+
+    <!-- ── Combined Overview ── -->
+    <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:18px">
+      <div style="font-size:14px;font-weight:800;color:#111827;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid #F3F4F6">📊 Combined Overview</div>
+      ${kpiRow(all,'#6366F1')}
+    </div>
+
+    <!-- ── Two-column: Huawei + ZTE ── -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:18px">
+
+      <!-- Huawei -->
+      <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);border-top:4px solid #E74C3C">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid #F3F4F6">
+          <div style="width:28px;height:28px;border-radius:8px;background:#E74C3C;display:flex;align-items:center;justify-content:center;font-size:14px">🔴</div>
+          <div style="font-size:14px;font-weight:800;color:#111827">Huawei</div>
+          <div style="margin-left:auto;font-size:12px;font-weight:700;color:#E74C3C">${hwData.length} activities</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+          <div style="background:#FEF2F2;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#E74C3C">${hw.completed}</div>
+            <div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Completed</div>
+            <div style="font-size:11px;color:#9CA3AF;margin-top:2px">${hw.rate}% rate</div>
+          </div>
+          <div style="background:#EFF6FF;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#2563EB">${hw.active}</div>
+            <div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Active</div>
+            <div style="font-size:11px;color:#9CA3AF;margin-top:2px">${hw.pending} unassigned</div>
+          </div>
+          <div style="background:#FFFBEB;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#D97706">${hw.avgAging}</div>
+            <div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Avg Days</div>
+          </div>
+          <div style="background:#F5F3FF;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#7C3AED">${hw.recent}</div>
+            <div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Last 7d</div>
+          </div>
+        </div>
+        <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px">By Category</div>
+        ${typeBreakdown(hwData)||'<div style="color:#9CA3AF;font-size:12px">No data</div>'}
+      </div>
+
+      <!-- ZTE -->
+      <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);border-top:4px solid #059669">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid #F3F4F6">
+          <div style="width:28px;height:28px;border-radius:8px;background:#059669;display:flex;align-items:center;justify-content:center;font-size:14px">🟢</div>
+          <div style="font-size:14px;font-weight:800;color:#111827">ZTE</div>
+          <div style="margin-left:auto;font-size:12px;font-weight:700;color:#059669">${zteData.length} activities</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+          <div style="background:#F0FDF4;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#059669">${zte.completed}</div>
+            <div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Completed</div>
+            <div style="font-size:11px;color:#9CA3AF;margin-top:2px">${zte.rate}% rate</div>
+          </div>
+          <div style="background:#EFF6FF;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#2563EB">${zte.active}</div>
+            <div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Active</div>
+            <div style="font-size:11px;color:#9CA3AF;margin-top:2px">${zte.pending} unassigned</div>
+          </div>
+          <div style="background:#FFFBEB;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#D97706">${zte.avgAging}</div>
+            <div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Avg Days</div>
+          </div>
+          <div style="background:#F5F3FF;border-radius:10px;padding:12px;text-align:center">
+            <div style="font-size:22px;font-weight:800;color:#7C3AED">${zte.recent}</div>
+            <div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Last 7d</div>
+          </div>
+        </div>
+        <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px">By Category</div>
+        ${typeBreakdown(zteData)||'<div style="color:#9CA3AF;font-size:12px">No data</div>'}
+      </div>
+    </div>
+
+    <!-- ── Agent Performance ── -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        <div style="font-size:13px;font-weight:800;color:#111827;margin-bottom:14px">🔴 Huawei Team Performance</div>
+        ${agentTable(hwData,'Huawei','#E74C3C')}
+      </div>
+      <div style="background:#fff;border-radius:14px;padding:20px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        <div style="font-size:13px;font-weight:800;color:#111827;margin-bottom:14px">🟢 ZTE Team Performance</div>
+        ${agentTable(zteData,'ZTE','#059669')}
+      </div>
+    </div>
+  </div>`;
+}
+
 </script>
 
 <!-- ═══ ATTENDANCE FULL PAGE ═══════════════════════════════════════════ -->
