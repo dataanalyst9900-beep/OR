@@ -990,8 +990,10 @@ async function loadActivities() {
     ACT_LOAD=false; if(MODULE==='activity') renderPage();
   }
   // Compute how many open unassigned + rejected activities need coordinator action
+  // Only LCC activities need coordinator assignment
   ASSIGN_BADGE = ALL_ACTS.filter(a =>
-    (!a.assigned_to && (a.status==='open'||!a.status)) || a.status==='rejected'
+    (a.target_company||a.company||'').toUpperCase()==='LCC' &&
+    ((!a.assigned_to && (a.status==='open'||!a.status)) || a.status==='rejected')
   ).length;
 }
 
@@ -1558,7 +1560,7 @@ function _doBulkXlsx(){
   function cellRef(r,c){ return colLetter(c)+(r+1); }
 
   // ── shared strings ────────────────────────────────────────────
-  const headers = ['type','title','description','site_id','region','priority','poc_name','complaint_lat','complaint_lng','instructions_team'];
+  const headers = ['type','title','description','site_id','region','priority','poc_name','complaint_lat','complaint_lng','instructions_team','target_company'];
   // All strings go into shared strings table
   const allStrings = [];
   const strIdx = {};
@@ -1576,13 +1578,15 @@ function _doBulkXlsx(){
   const maxRows = Math.max(typeList.length, regionList.length, prioList.length);
   let listsRows = '';
   // header row for lists
-  listsRows += `<row r="1"><c r="A1" t="s"><v>${addStr('type')}</v></c><c r="B1" t="s"><v>${addStr('region')}</v></c><c r="C1" t="s"><v>${addStr('priority')}</v></c></row>`;
+  listsRows += `<row r="1"><c r="A1" t="s"><v>${addStr('type')}</v></c><c r="B1" t="s"><v>${addStr('region')}</v></c><c r="C1" t="s"><v>${addStr('priority')}</v></c><c r="D1" t="s"><v>${addStr('target_company')}</v></c></row>`;
+  const coList = ['LCC','Huawei','ZTE'];
   for(let i=0;i<maxRows;i++){
     const rn=i+2;
     let row=`<row r="${rn}">`;
     if(i<typeList.length)   row+=`<c r="A${rn}" t="s"><v>${addStr(typeList[i])}</v></c>`;
     if(i<regionList.length) row+=`<c r="B${rn}" t="s"><v>${addStr(regionList[i])}</v></c>`;
     if(i<prioList.length)   row+=`<c r="C${rn}" t="s"><v>${addStr(prioList[i])}</v></c>`;
+    if(i<coList.length)     row+=`<c r="D${rn}" t="s"><v>${addStr(coList[i])}</v></c>`;
     row+=`</row>`;
     listsRows+=row;
   }
@@ -1613,6 +1617,9 @@ function _doBulkXlsx(){
     <dataValidation type="list" showErrorMessage="1" showInputMessage="1" errorTitle="Invalid value" error="Please select Critical, High, Medium or Low." sqref="F2:F1001">
       <formula1>Lists!$C$2:$C$${prioRows+1}</formula1>
     </dataValidation>
+    <dataValidation type="list" showErrorMessage="1" showInputMessage="1" errorTitle="Invalid value" error="Please select LCC, Huawei or ZTE." sqref="K2:K1001">
+      <formula1>Lists!$D$2:$D$4</formula1>
+    </dataValidation>
   </dataValidations>`;
 
   // ── column widths ─────────────────────────────────────────────
@@ -1627,6 +1634,7 @@ function _doBulkXlsx(){
     <col min="8" max="8" width="16" customWidth="1"/>
     <col min="9" max="9" width="16" customWidth="1"/>
     <col min="10" max="10" width="30" customWidth="1"/>
+    <col min="11" max="11" width="18" customWidth="1"/>
   </cols>`;
 
   // ── shared strings XML ────────────────────────────────────────
@@ -1923,10 +1931,40 @@ async function executeBulkImport(){
         status: 'open',
         created_by: AUTH.uid,
         created_by_name: AUTH.name,
-        company: AUTH.company,
-        target_company: AUTH.company,
+        company: (()=>{
+          // CMPAK uploader: honour target_company from row, else from UI selector
+          const _isCmpakBulk=(AUTH?.company||'').toUpperCase()==='CMPAK';
+          if(_isCmpakBulk){
+            const _tc=(r.target_company||'').trim()||ACT_ASSIGNEE_CO||'LCC';
+            const valid=['LCC','Huawei','ZTE'];
+            return valid.find(v=>v.toLowerCase()===_tc.toLowerCase())||'LCC';
+          }
+          return AUTH.company;
+        })(),
+        target_company: (()=>{
+          const _isCmpakBulk=(AUTH?.company||'').toUpperCase()==='CMPAK';
+          if(_isCmpakBulk){
+            const _tc=(r.target_company||'').trim()||ACT_ASSIGNEE_CO||'LCC';
+            const valid=['LCC','Huawei','ZTE'];
+            return valid.find(v=>v.toLowerCase()===_tc.toLowerCase())||'LCC';
+          }
+          return AUTH.company;
+        })(),
         created_at: new Date().toISOString(),
-        assigned_to: null, assigned_to_name: null,
+        // HW/ZTE: auto-assign to selected agent if CMPAK uploader
+        ...((()=>{
+          const _isCmpakBulk=(AUTH?.company||'').toUpperCase()==='CMPAK';
+          if(!_isCmpakBulk) return {assigned_to:null,assigned_to_name:null,assigned_at:null,status:'open'};
+          const _tc=(r.target_company||'').trim()||ACT_ASSIGNEE_CO||'LCC';
+          const _tcUp=_tc.toUpperCase();
+          if(_tcUp==='HUAWEI'||_tcUp==='ZTE'){
+            // Use ACT_ASSIGNEE_UID set in the UI selector
+            const _pool=_tcUp==='HUAWEI'?HW_AGENTS:ZTE_AGENTS;
+            const _ag=ACT_ASSIGNEE_UID?_pool.find(x=>x.uid===ACT_ASSIGNEE_UID):null;
+            if(_ag) return {assigned_to:_ag.uid,assigned_to_name:_ag.name||_ag.email,assigned_at:new Date().toISOString(),status:'assigned'};
+          }
+          return {assigned_to:null,assigned_to_name:null,assigned_at:null,status:'open'};
+        })()),
       });
       imported++;
     } catch(e){ console.error('[bulk]',e); failed++; }
@@ -1998,7 +2036,7 @@ function renderSidebar() {
       <button class="nav-item" onclick="loadAnalytics()"><span class="ni">🔄</span>Refresh</button>`;
   } else {
     const _isCmpakNav=(AUTH?.company||'').toUpperCase()==='CMPAK';
-    const _isCoordNav=AUTH?.isCoordinator&&_isCmpakNav;
+    const _isCoordNav=AUTH?.isCoordinator&&(AUTH?.company||'').toUpperCase()==='LCC';
     function _navBtn(n){ return `<button class="nav-item ${AC_PAGE===n.id?'active':''}" onclick="actNav('${n.id}')"><span class="ni">${n.icon}</span>${n.label}${n.badge?`<span class="nav-badge">${n.badge}</span>`:''}</button>`; }
     sidebar.innerHTML=`
       <div class="sidebar-label">Activities</div>
@@ -2182,13 +2220,13 @@ function renderAuditHistory(){
 ${!MY_AUDITS.length?`<div class="empty-state"><div class="ei">📋</div><p>No audits submitted yet.</p></div>`:`
 <div class="card"><table class="data-table">
 <thead><tr><th>Site ID</th><th>Grid</th><th>Type</th><th>Submitted</th><th>Status</th><th>Actions</th></tr></thead>
-<tbody>${MY_AUDITS.map(a=>{const st=a.status||'pending_approval';return`<tr>
+<tbody>${MY_AUDITS.map((a,i)=>{const st=a.status||'pending_approval';return`<tr>
 <td><b style="font-family:var(--mono)">${escH(a.site_id||'—')}</b></td>
 <td><span class="tag">${escH(a.grid_id||'—')}</span></td>
 <td>${escH(a.site_type||'—')}</td>
 <td style="color:var(--muted);font-size:12px">${fmtDT(a.submitted_at)}</td>
 <td>${statusBadge(st)}${a.approver_remarks?`<div style="font-size:11px;color:var(--muted);margin-top:2px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(a.approver_remarks)}</div>`:''}</td>
-<td style="display:flex;gap:6px"><button class="btn btn-outline btn-sm" onclick="openAuditDetail(${a._idx||0})">👁 View</button>${st==='rejected'?`<button class="btn btn-warn btn-sm" onclick="openResub(${a._idx||0})">↺ Resubmit</button>`:''}</td>
+<td style="display:flex;gap:6px"><button class="btn btn-outline btn-sm" onclick="openAuditDetail(${i})">👁 View</button>${st==='rejected'?`<button class="btn btn-warn btn-sm" onclick="openResub(${i})">↺ Resubmit</button>`:''}</td>
 </tr>`;}).join('')}</tbody></table></div>`}
 </div>`;}
 
@@ -2611,10 +2649,11 @@ ${AUTH&&AUTH.isCoordinator?`<button class="btn btn-outline btn-sm" style="margin
 // ── ACTIVITIES: ASSIGN (Coordinator only) ─────────────────────
 function renderAssignActivities(){
   if(ACT_LOAD) return `<div class="empty-state"><div class="ei">⏳</div><p>Loading activities…</p></div>`;
-  // Only show truly open unassigned activities (not completed/cancelled/onhold)
-  const unassigned = ALL_ACTS.filter(a => !a.assigned_to && (a.status==='open' || !a.status));
-  // Also show assigned but rejected activities that need re-assignment
-  const rejected = ALL_ACTS.filter(a => a.status === 'rejected');
+  // Only LCC activities go through coordinator assignment
+  const _isLcc = a => (a.target_company||a.company||'').toUpperCase()==='LCC';
+  const unassigned = ALL_ACTS.filter(a => _isLcc(a) && !a.assigned_to && (a.status==='open'||!a.status));
+  // Also show LCC rejected activities that need re-assignment
+  const rejected = ALL_ACTS.filter(a => _isLcc(a) && a.status==='rejected');
   const needsAction = [...unassigned, ...rejected];
   const ic = AUTH && AUTH.isCoordinator;
   return`<div>
@@ -2907,13 +2946,65 @@ ${(function(){
   return h+'</div>';
 })()}
 ${isApr?`<hr class="sep"/><div class="form-group"><label>Approver Remarks (optional)</label><textarea id="apr-rem" placeholder="Visible to auditor…"></textarea></div>`:''}
+
+<hr class="sep"/>
+<div style="font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">+ 3D Site Visualization</div>
+<div id="aud-3d-wrap" style="position:relative;height:420px;border-radius:10px;border:1px solid var(--border);overflow:hidden;background:#0a0f1a">
+  <div id="aud-sat-map" style="position:absolute;inset:0;width:100%;height:100%"></div>
+  <div id="aud-3d-mount" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1000"></div>
+</div>
 </div>
 <div class="modal-ftr">
 ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Edit & Approve</button>
 <button class="btn btn-danger" onclick="openRejectModal('${a.id}')">✕ Reject</button>
 <button class="btn btn-success" onclick="doApprove('${a.id}')">✓ Approve</button>`
 :`<button class="btn btn-outline" onclick="closeModal()">Close</button>`}
-</div></div></div>`; return;
+</div></div></div>`;
+    // Init 3D visualization — fetch lat/lng from SSL table in Cell_db project
+    setTimeout(async ()=>{
+      window._audSslCache = window._audSslCache || {};
+      window._audVisTech = new Set(['4g']);
+      const siteId = (a.site_id||'').trim();
+      // Try cache first
+      if(!window._audSslCache[siteId] || !window._audSslCache[siteId].Latitude){
+        try {
+          // Site column is int8 — cast to integer for the query
+          const _siteInt = parseInt(siteId, 10);
+          const _r = await fetch(
+            'https://dvcndhtjoionkjngebgk.supabase.co/rest/v1/SSL?Site=eq.' + _siteInt + '&select=*&limit=1',
+            { headers:{ apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2Y25kaHRqb2lvbmtqbmdlYmdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MjA2MTYsImV4cCI6MjA4ODk5NjYxNn0.zYWT7_NEHxsi8p5oHRTUOfR5DO_MnvnAPsrN3ZW8xIU',
+              Authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2Y25kaHRqb2lvbmtqbmdlYmdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MjA2MTYsImV4cCI6MjA4ODk5NjYxNn0.zYWT7_NEHxsi8p5oHRTUOfR5DO_MnvnAPsrN3ZW8xIU' } }
+          );
+          if(_r.ok){
+            const _rows = await _r.json();
+            console.log('[AudViz] SSL raw row for', siteId, ':', JSON.stringify(_rows[0]));
+            if(_rows && _rows.length){
+              const _row = _rows[0];
+              // Try all common column name variants
+              const _lat = parseFloat(_row.Latitude ?? _row.latitude ?? _row.lat ?? _row.LAT ?? 0);
+              const _lng = parseFloat(_row.Longitude ?? _row.longitude ?? _row.lng ?? _row.lon ?? _row.LNG ?? 0);
+              window._audSslCache[siteId] = { Latitude: _lat, Longitude: _lng };
+              console.log('[AudViz] resolved lat/lng for', siteId, ':', _lat, _lng);
+            }
+          } else {
+            const _err = await _r.json().catch(()=>({}));
+            console.error('[AudViz] SSL fetch HTTP', _r.status, _err);
+          }
+        } catch(e){ console.warn('[AudViz] SSL fetch failed', e); }
+      }
+      // Fallback to local SSL_CACHE if remote fetch got nothing
+      if(!window._audSslCache[siteId] || !window._audSslCache[siteId].Latitude){
+        const _local = SSL_CACHE.find(s => s.siteId === siteId);
+        if(_local) window._audSslCache[siteId] = { Latitude: _local.lat, Longitude: _local.lng };
+      }
+      // Pass lat/lng directly — avoids any variable scope / cache key issues
+      const _coords = window._audSslCache[siteId] || {};
+      const _lat = _coords.Latitude  || 0;
+      const _lng = _coords.Longitude || 0;
+      console.log('[AudViz] calling audDraw3D with', siteId, _lat, _lng);
+      audDraw3D(a, secs, _lat, _lng);
+    }, 200);
+    return;
   }
 
   if(m.type==='edit_activity'){
@@ -3602,7 +3693,7 @@ function lmClearSurveyDots(){
 // ── Show/hide tab & switchModule ──────────────────────────────────────
 function showLiveMapTabIfCoordinator(){
   const btn=document.getElementById('mod-livemap');
-  if(btn&&AUTH&&AUTH.isCoordinator&&(AUTH?.company||'').toUpperCase()==='CMPAK') btn.style.display='';
+  if(btn&&AUTH&&AUTH.isCoordinator&&(AUTH?.company||'').toUpperCase()==='LCC') btn.style.display='';
 }
 
 
@@ -4864,6 +4955,163 @@ function renderHwZteAnalytics(){
     </div>
   </div>`;
 }
+
+// ════════════════════════════════════════════════════════════════
+// AUDIT 3D VISUALIZATION — canvas overlay on Leaflet satellite map
+// Exact port of SiteQuery audit visualization.
+// Sectors from audit data. Azimuth: tech_4g→3g→2g. BW=60° split.
+// ════════════════════════════════════════════════════════════════
+
+let _audSatMap=null, _audAnimId=null;
+let _audVisTech=new Set(['4g']);
+let _audSslCache={};
+
+function aud3dDispose(){
+  if(_audAnimId){cancelAnimationFrame(_audAnimId);_audAnimId=null;}
+  if(_audSatMap){try{_audSatMap.remove();}catch(e){} _audSatMap=null;}
+  const sm=document.getElementById('aud-sat-map');
+  if(sm) sm.innerHTML='';
+  const mm=document.getElementById('aud-3d-mount');
+  if(mm) mm.innerHTML='';
+}
+
+function audDraw3D(audit, sectors, siteLat, siteLng){
+  aud3dDispose();
+  siteLat = siteLat || 31.5;
+  siteLng = siteLng || 74.3;
+
+  const satDiv=document.getElementById('aud-sat-map');
+  if(!satDiv||typeof L==='undefined') return;
+
+  _audSatMap=L.map('aud-sat-map',{
+    zoomControl:true, attributionControl:false,
+    center:[siteLat,siteLng], zoom:18
+  });
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {maxZoom:21}).addTo(_audSatMap);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}{r}.png',
+    {maxZoom:21,opacity:0.7}).addTo(_audSatMap);
+
+  const bh=parseFloat(audit.building_height)||0;
+  const th=parseFloat(audit.tower_height)||30;
+  const SCOLS=['#1E6FE8','#16A34A','#D97706','#7C3AED'];
+
+  const mount=document.getElementById('aud-3d-mount');
+  if(!mount) return;
+  mount.style.pointerEvents='none';
+
+  const canvas=document.createElement('canvas');
+  canvas.style.cssText='position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1000';
+  mount.appendChild(canvas);
+
+  function resizeCanvas(){
+    const wrap=document.getElementById('aud-3d-wrap');
+    if(!wrap) return;
+    canvas.width=wrap.offsetWidth||800;
+    canvas.height=wrap.offsetHeight||480;
+  }
+  resizeCanvas();
+  const _ro=new ResizeObserver(()=>{ resizeCanvas(); drawTower(); });
+  _ro.observe(document.getElementById('aud-3d-wrap')||mount);
+
+  function drawTower(){
+    if(!_audSatMap||!canvas) return;
+    const ctx=canvas.getContext('2d');
+    const W=canvas.width, H=canvas.height;
+    ctx.clearRect(0,0,W,H);
+
+    const sitePoint=_audSatMap.latLngToContainerPoint([siteLat,siteLng]);
+    const cx=sitePoint.x, cy=sitePoint.y;
+
+    const metersPerPx=156543.03392*Math.cos(siteLat*Math.PI/180)/Math.pow(2,_audSatMap.getZoom());
+    const R=Math.min(Math.max(35,300/metersPerPx),Math.min(W,H)*0.38);
+    const TOWER_R=10;
+    const azToCanvas=az=>az*Math.PI/180-Math.PI/2;
+    const _lq=[];
+
+    sectors.forEach((s,i)=>{
+      if(i>=4) return;
+      const ft=s.tech_4g||s.tech_3g||s.tech_2g||s.tech_5g||{};
+      const az=parseFloat(s.azimuth||s.antenna_azimuth||ft.azimuth||0);
+      const bw=parseFloat(s.beamwidth||ft.beamwidth||60);
+      const mt=parseFloat(s.mechanical_tilt||ft.m_tilt||0);
+      const et=parseFloat(s.electrical_tilt||ft.e_tilt||0);
+      const lbl=(s.sector||String.fromCharCode(65+i)).toUpperCase();
+      const col=SCOLS[i%4];
+      if(!(s.azimuth||s.antenna_azimuth||ft.azimuth)) return;
+
+      const a0=azToCanvas(az-bw/2), a1=azToCanvas(az+bw/2);
+
+      ctx.beginPath();
+      ctx.moveTo(cx+Math.cos(a0)*TOWER_R,cy+Math.sin(a0)*TOWER_R);
+      ctx.arc(cx,cy,R,a0,a1);
+      ctx.lineTo(cx+Math.cos(a1)*TOWER_R,cy+Math.sin(a1)*TOWER_R);
+      ctx.arc(cx,cy,TOWER_R,a1,a0,true);
+      ctx.closePath();
+      ctx.fillStyle=col+'33'; ctx.fill();
+      ctx.strokeStyle=col+'cc'; ctx.lineWidth=1.8; ctx.stroke();
+
+      _lq.push({lbl,az,mt,et,col,antH:parseFloat(s.antenna_height)||0});
+    });
+
+    // Labels
+    _lq.forEach(({lbl,az,mt,et,col,antH})=>{
+      const ba=azToCanvas(az);
+      const lx=cx+Math.cos(ba)*(R+16), ly=cy+Math.sin(ba)*(R+16);
+      ctx.font='bold 10px system-ui';
+      const l1=`${lbl}  ${az}°`;
+      const l2=`H:${antH||'—'}m  M${mt}°  E${et}°`;
+      const lw=Math.max(ctx.measureText(l1).width,ctx.measureText(l2).width)+18;
+      const lh=34;
+      ctx.fillStyle='rgba(15,25,40,0.88)';
+      ctx.beginPath();
+      if(ctx.roundRect) ctx.roundRect(lx-lw/2,ly-lh/2,lw,lh,5);
+      else ctx.rect(lx-lw/2,ly-lh/2,lw,lh);
+      ctx.fill();
+      ctx.fillStyle=col; ctx.fillRect(lx-lw/2,ly-lh/2,3,lh);
+      ctx.fillStyle='#F1F5F9'; ctx.font='bold 10px system-ui'; ctx.textAlign='center';
+      ctx.fillText(l1,lx+1,ly-3);
+      ctx.font='9px system-ui';
+      const hw=ctx.measureText('H:'+antH+'m').width, mw=ctx.measureText('  M'+mt+'°').width, ew=ctx.measureText('  E'+et+'°').width;
+      let tx=lx+1-(hw+mw+ew)/2;
+      ctx.fillStyle='#FCD34D'; ctx.fillText('H:'+(antH||'—')+'m',tx+hw/2,ly+10); tx+=hw;
+      ctx.fillStyle='#67E8F9'; ctx.fillText('  M'+mt+'°',tx+mw/2,ly+10); tx+=mw;
+      ctx.fillStyle='#FB923C'; ctx.fillText('  E'+et+'°',tx+ew/2,ly+10);
+    });
+
+    // Site info panel
+    const lines=[`${audit.site_type||''} · ${audit.tower_type||''}`,`Tower ${th}m`+(bh>0?` + Bldg ${bh}m`:'')];
+    ctx.fillStyle='rgba(0,0,0,0.65)';
+    ctx.beginPath();
+    if(ctx.roundRect) ctx.roundRect(10,10,180,lines.length*18+12,6);
+    else ctx.rect(10,10,180,lines.length*18+12);
+    ctx.fill();
+    lines.forEach((t,n)=>{ ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.font='bold 10px system-ui'; ctx.textAlign='left'; ctx.fillText(t,18,26+n*18); });
+
+    // North indicator
+    const nx=W-36, ny=56;
+    ctx.save();
+    ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.beginPath(); ctx.arc(nx,ny,22,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#EF4444'; ctx.beginPath(); ctx.moveTo(nx,ny-18); ctx.lineTo(nx-5,ny); ctx.lineTo(nx+5,ny); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.moveTo(nx,ny+18); ctx.lineTo(nx-5,ny); ctx.lineTo(nx+5,ny); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 10px system-ui'; ctx.textAlign='center'; ctx.fillText('N',nx,ny-6);
+    ctx.restore();
+
+    // Tower dot
+    ctx.beginPath(); ctx.arc(cx,cy,TOWER_R,0,Math.PI*2);
+    ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.6)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+
+  window._audDrawTower=drawTower;
+  _audSatMap.on('move zoom moveend zoomend',drawTower);
+  setTimeout(()=>{ _audSatMap.invalidateSize(); drawTower(); },300);
+  _audAnimId=0;
+}
+
+// Dispose on modal close
+const _origClose=window.closeModal;
+window.closeModal=function(){ aud3dDispose(); if(_origClose) _origClose(); };
 
 </script>
 
