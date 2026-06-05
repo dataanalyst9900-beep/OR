@@ -2353,13 +2353,24 @@ ${isCmpak?`
 <!-- Company KPI cards -->
 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
   ${[{co:'all',label:'All',color:'#6366F1',bg:'#EEF2FF'},{co:'LCC',label:'LCC',color:'#1E40AF',bg:'#DBEAFE'},{co:'Huawei',label:'Huawei',color:'#DC2626',bg:'#FEE2E2'},{co:'ZTE',label:'ZTE',color:'#059669',bg:'#D1FAE5'}].map(({co,label,color,bg})=>{
-    const cnt=co==='all'?activeAll.length:coCnt(co);
-    const tot=co==='all'?ALL_ACTS.length:ALL_ACTS.filter(a=>(a.target_company||a.company||'').toUpperCase()===co.toUpperCase()).length;
-    const done=co==='all'?ALL_ACTS.filter(a=>a.status==='completed').length:ALL_ACTS.filter(a=>(a.target_company||a.company||'').toUpperCase()===co.toUpperCase()&&a.status==='completed').length;
-    return `<div onclick="window._dashTab='${co}';renderPage()" style="cursor:pointer;background:#fff;border-radius:12px;padding:16px 18px;border:2px solid ${window._dashTab===co?color:bg};box-shadow:0 1px 4px rgba(0,0,0,.06);transition:all .15s">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${color};margin-bottom:6px">${label}</div>
-      <div style="font-size:26px;font-weight:800;color:#111827;line-height:1">${cnt}</div>
-      <div style="font-size:11px;color:#6B7280;margin-top:3px">active · ${done}/${tot} done</div>
+    const _coActs = co==='all' ? ALL_ACTS : ALL_ACTS.filter(a=>(a.target_company||a.company||'').toUpperCase()===co.toUpperCase());
+    const _open   = _coActs.filter(a=>!['completed','cancelled','onhold'].includes(a.status)).length;
+    const _asgnd  = _coActs.filter(a=>a.assigned_to && !['completed','cancelled','onhold'].includes(a.status)).length;
+    const _unasgd = _coActs.filter(a=>!a.assigned_to && !['completed','cancelled','onhold'].includes(a.status)).length;
+    return `<div onclick="window._dashTab='${co}';renderPage()" style="cursor:pointer;background:#fff;border-radius:12px;padding:14px 16px;border:2px solid ${window._dashTab===co?color:bg};box-shadow:0 1px 4px rgba(0,0,0,.06);transition:all .15s">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:${color};margin-bottom:8px">${label}</div>
+      <div style="font-size:24px;font-weight:800;color:#111827;line-height:1;margin-bottom:6px">${_open}</div>
+      <div style="font-size:10px;color:#6B7280">Open activities</div>
+      <div style="display:flex;gap:10px;margin-top:8px;padding-top:8px;border-top:1px solid #F3F4F6">
+        <div style="flex:1;text-align:center">
+          <div style="font-size:15px;font-weight:700;color:#2563EB">${_asgnd}</div>
+          <div style="font-size:10px;color:#6B7280">Assigned</div>
+        </div>
+        <div style="flex:1;text-align:center">
+          <div style="font-size:15px;font-weight:700;color:#F59E0B">${_unasgd}</div>
+          <div style="font-size:10px;color:#6B7280">Unassigned</div>
+        </div>
+      </div>
     </div>`;
   }).join('')}
 </div>
@@ -2389,31 +2400,52 @@ ${myPending.length>0?`
   </tbody></table></div>
 </div>`:``}
 
-${!active.length?`<div class="empty-state"><div class="ei">✅</div><p>No active activities${isCmpak&&window._dashTab!=='all'?' for '+window._dashTab:''}.</p></div>`:`
-<div class="card"><div style="overflow-x:auto"><table class="data-table">
-<thead><tr>
-  <th>Type</th><th>Title</th><th>Region</th><th>Site</th>
-  <th>Priority</th><th>Status</th><th>Assigned To</th>
-  ${isCmpak?'<th>Company</th>':''}
-  <th>CMPAK POC</th><th>Created</th><th></th>
-</tr></thead>
-<tbody>${active.map((a,i)=>{const t=actTypeLabel(a.type);const idx=ALL_ACTS.indexOf(a);return`<tr>
-<td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
-<td><b>${escH(a.title||'—')}</b></td>
-<td style="font-size:12px;color:var(--muted)">${escH(a.region||'—')}</td>
-<td style="font-family:var(--mono);font-size:12px">${escH(a.site_id||'—')}</td>
-<td><span class="tag">${escH(a.priority||'—')}</span></td>
-<td>${statusBadge(a.status||'open')}</td>
-<td style="font-size:12px;color:var(--muted)">${escH(a.assigned_to_name||'Unassigned')}</td>
-${isCmpak?`<td>${coTag(a)}</td>`:''}
-<td style="font-size:12px;color:var(--muted)">${escH(a.poc_name||'—')}</td>
-<td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
-<td style="white-space:nowrap">
-  <button class="btn btn-outline btn-sm" onclick="openActDetail(${idx},'all')">View</button>
-  ${isCoordinator?`<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="openEditActivityModal('${a.id}')">✏ Edit</button>`:''}
-  ${a.assigned_to===myUid&&a.status==='assigned'?`<button class="btn btn-primary btn-sm" style="background:#059669;margin-left:4px" onclick="acceptActivity('${a.id}')">✅ Accept</button><button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="rejectActivity('${a.id}')">✕ Reject</button>`:''}
-</td>
-</tr>`;}).join('')}</tbody></table></div></div>`}
+${(()=>{
+  const assigned   = tabFilter(ALL_ACTS.filter(a=>a.assigned_to  && !['completed','cancelled','onhold'].includes(a.status)));
+  const unassigned = tabFilter(ALL_ACTS.filter(a=>!a.assigned_to && !['completed','cancelled','onhold'].includes(a.status)));
+
+  function actRow(a){
+    const t=actTypeLabel(a.type);const idx=ALL_ACTS.indexOf(a);
+    return `<tr>
+      <td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
+      <td><b>${escH(a.title||'—')}</b></td>
+      <td style="font-size:12px;color:var(--muted)">${escH(a.region||'—')}</td>
+      <td style="font-family:var(--mono);font-size:12px">${escH(a.site_id||'—')}</td>
+      <td><span class="tag">${escH(a.priority||'—')}</span></td>
+      <td>${statusBadge(a.status||'open')}</td>
+      <td style="font-size:12px;color:var(--muted)">${escH(a.assigned_to_name||'—')}</td>
+      ${isCmpak?`<td>${coTag(a)}</td>`:''}
+      <td style="font-size:12px;color:var(--muted)">${escH(a.poc_name||'—')}</td>
+      <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="openActDetail(${idx},'all')">View</button>
+        ${isCoordinator?`<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="openEditActivityModal('${a.id}')">✏ Edit</button>`:''}
+        ${a.assigned_to===myUid&&a.status==='assigned'?`<button class="btn btn-primary btn-sm" style="background:#059669;margin-left:4px" onclick="acceptActivity('${a.id}')">✅ Accept</button><button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="rejectActivity('${a.id}')">✕ Reject</button>`:''}
+      </td>
+    </tr>`;
+  }
+
+  const tableHead = `<thead><tr>
+    <th>Type</th><th>Title</th><th>Region</th><th>Site</th>
+    <th>Priority</th><th>Status</th><th>Assigned To</th>
+    ${isCmpak?'<th>Company</th>':''}
+    <th>CMPAK POC</th><th>Created</th><th></th>
+  </tr></thead>`;
+
+  return `
+    ${assigned.length?`
+    <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px">✅ Assigned Activities <span style="font-size:11px;font-weight:400;color:#6B7280">(${assigned.length})</span></div>
+    <div class="card" style="margin-bottom:18px"><div style="overflow-x:auto"><table class="data-table">
+    ${tableHead}<tbody>${assigned.map(actRow).join('')}</tbody></table></div></div>`
+    :`<div class="empty-state" style="padding:20px"><div class="ei" style="font-size:24px">✅</div><p style="font-size:13px">No assigned activities${isCmpak&&window._dashTab!=='all'?' for '+window._dashTab:''}.</p></div>`}
+
+    <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px;margin-top:4px">⚠️ Unassigned Activities <span style="font-size:11px;font-weight:400;color:#6B7280">(${unassigned.length})</span></div>
+    ${unassigned.length?`
+    <div class="card"><div style="overflow-x:auto"><table class="data-table">
+    ${tableHead}<tbody>${unassigned.map(actRow).join('')}</tbody></table></div></div>`
+    :`<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:14px 18px;font-size:13px;color:#92400E">No unassigned activities${isCmpak&&window._dashTab!=='all'?' for '+window._dashTab:''}. 🎉</div>`}
+  `;
+})()}
 </div>`;
 }
 
@@ -2908,6 +2940,7 @@ _assignPool.map(ag=>`<div style="display:flex;align-items:center;justify-content
 <div class="detail-field"><div class="dk">Grid</div><div class="dv">${escH(a.grid_id||'—')}</div></div>
 <div class="detail-field"><div class="dk">Site Type</div><div class="dv">${escH(a.site_type||'—')}</div></div>
 <div class="detail-field"><div class="dk">Tower Type</div><div class="dv">${escH(a.tower_type||'—')}</div></div>
+<div class="detail-field"><div class="dk">Tower Height</div><div class="dv">${a.tower_height!==''&&a.tower_height!=null?escH(String(a.tower_height))+'m':'—'}</div></div>
 </div>
 <div class="detail-row" style="margin-top:10px">
 <div class="detail-field"><div class="dk">By</div><div class="dv">${escH(a.submitted_by_name||'—')}</div></div>
@@ -2921,12 +2954,12 @@ ${(()=>{
   // Use SSL-derived techs — already computed above as siteShowTechs
   const showTechs = siteShowTechs;
   return secs.map(sec=>`<hr class="sep"/>
-<div><b style="font-size:13px">Sector ${escH(sec.sector)}${sec.antenna_height?' · H: '+sec.antenna_height+'m':''}</b>
+<div><b style="font-size:13px">Sector ${escH(sec.sector)}</b>
 <div style="overflow-x:auto;margin-top:8px">
 <table style="width:100%;border-collapse:collapse;min-width:400px;font-size:12px">
 <thead><tr><th style="padding:6px 10px;background:var(--bg);border-bottom:1px solid var(--border);text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase">Field</th>
 ${showTechs.map(t=>`<th style="padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--border);text-align:center;font-size:11px;color:var(--muted);text-transform:uppercase">${t}</th>`).join('')}</tr></thead>
-<tbody>${[['Antenna','antenna_type'],['Azimuth','azimuth'],['M.Tilt','m_tilt'],['E.Tilt','e_tilt']].map(([lbl,key])=>`<tr>
+<tbody><tr style="background:var(--bg2,#F9FAFB)"><td style="padding:6px 10px;font-weight:600;border-bottom:1px solid var(--border)">Antenna Height</td>${showTechs.map(()=>`<td style="padding:6px 8px;text-align:center;border-bottom:1px solid var(--border)">${sec.antenna_height!==''&&sec.antenna_height!=null?escH(String(sec.antenna_height))+'m':'—'}</td>`).join('')}</tr>${[['Antenna','antenna_type'],['Azimuth','azimuth'],['M.Tilt','m_tilt'],['E.Tilt','e_tilt']].map(([lbl,key])=>`<tr>
 <td style="padding:5px 10px;color:var(--muted);border-bottom:1px solid var(--border);font-weight:600">${lbl}</td>
 ${showTechs.map(t=>{const td=sec['tech_'+t.toLowerCase()];return`<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);font-family:var(--mono)">${escH((td&&td[key])||'—')}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>
 ${sec.photo_url?`<div style="margin-top:8px"><img src="${escH(sec.photo_url)}" class="photo-thumb" onclick="openPhotoZoom(this.src)"/></div>`:''}</div>`).join('');
@@ -4992,8 +5025,8 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
   L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}{r}.png',
     {maxZoom:21,opacity:0.7}).addTo(_audSatMap);
 
-  const bh=parseFloat(audit.building_height)||0;
-  const th=parseFloat(audit.tower_height)||30;
+  const bh=audit.building_height!==''&&audit.building_height!=null?parseFloat(audit.building_height):0;
+  const th=audit.tower_height!==''&&audit.tower_height!=null?parseFloat(audit.tower_height):0;
   const SCOLS=['#1E6FE8','#16A34A','#D97706','#7C3AED'];
 
   const mount=document.getElementById('aud-3d-mount');
@@ -5014,6 +5047,42 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
   const _ro=new ResizeObserver(()=>{ resizeCanvas(); drawTower(); });
   _ro.observe(document.getElementById('aud-3d-wrap')||mount);
 
+  // Cell_db beam data: sectorIdx(0-based) → [{bw}]
+  let _cellDbBeams = {};
+
+  // Fetch L-1800 from Cell_db for beam splitting (async, redraws when done)
+  (async()=>{
+    try{
+      const _siteInt=parseInt((audit.site_id||'').trim(),10);
+      const _cr=await fetch(
+        'https://dvcndhtjoionkjngebgk.supabase.co/rest/v1/Cell_db?Site=eq.'+_siteInt+'&select=*&limit=500',
+        {headers:{apikey:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2Y25kaHRqb2lvbmtqbmdlYmdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MjA2MTYsImV4cCI6MjA4ODk5NjYxNn0.zYWT7_NEHxsi8p5oHRTUOfR5DO_MnvnAPsrN3ZW8xIU',
+          Authorization:'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2Y25kaHRqb2lvbmtqbmdlYmdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MjA2MTYsImV4cCI6MjA4ODk5NjYxNn0.zYWT7_NEHxsi8p5oHRTUOfR5DO_MnvnAPsrN3ZW8xIU'}}
+      );
+      if(_cr.ok){
+        const _rows=await _cr.json();
+        const l1800=_rows.filter(row=>{
+          const band=(row['Frequency Band']||row['Cell Band']||row['band']||'').toUpperCase();
+          return band.includes('L-1800')||band.includes('LTE1800')||band.includes('1800')||band.includes('FDD1800');
+        });
+        // Map to sector index by Site_id_Sec suffix (1=A,2=B,3=C,4=D)
+        l1800.forEach(row=>{
+          // Site id_Sec format: "45025_1", "45025_2" — last token is sector number
+          const siteIdSec = row['Site id_Sec']||row['Site_id_Sec']||'';
+          const parts = siteIdSec.split('_');
+          const sec = parseInt(parts[parts.length-1])||0;
+          console.log('[AudDraw] Site_id_Sec:',siteIdSec,'→ sec:',sec);
+          if(!sec) return;
+          if(!_cellDbBeams[sec-1]) _cellDbBeams[sec-1]=[];
+          _cellDbBeams[sec-1].push(1); // just count L-1800 cells per sector
+        });
+        console.log('[AudDraw] L-1800 counts per sector (0-based):', JSON.stringify(_cellDbBeams));
+        console.log('[AudDraw] L-1800 beams:',JSON.stringify(_cellDbBeams));
+      }
+    }catch(e){console.warn('[AudDraw] Cell_db:',e);}
+    drawTower();
+  })();
+
   function drawTower(){
     if(!_audSatMap||!canvas) return;
     const ctx=canvas.getContext('2d');
@@ -5022,7 +5091,6 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
 
     const sitePoint=_audSatMap.latLngToContainerPoint([siteLat,siteLng]);
     const cx=sitePoint.x, cy=sitePoint.y;
-
     const metersPerPx=156543.03392*Math.cos(siteLat*Math.PI/180)/Math.pow(2,_audSatMap.getZoom());
     const R=Math.min(Math.max(35,300/metersPerPx),Math.min(W,H)*0.38);
     const TOWER_R=10;
@@ -5032,36 +5100,85 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
     sectors.forEach((s,i)=>{
       if(i>=4) return;
       const ft=s.tech_4g||s.tech_3g||s.tech_2g||s.tech_5g||{};
-      const az=parseFloat(s.azimuth||s.antenna_azimuth||ft.azimuth||0);
-      const bw=parseFloat(s.beamwidth||ft.beamwidth||60);
-      const mt=parseFloat(s.mechanical_tilt||ft.m_tilt||0);
-      const et=parseFloat(s.electrical_tilt||ft.e_tilt||0);
+      const auditAz  = parseFloat(s.azimuth||s.antenna_azimuth||ft.azimuth||0);
+      const auditBw  = parseFloat(s.beamwidth||ft.beamwidth||60);
+      const mt = ft.m_tilt!==''&&ft.m_tilt!=null ? parseFloat(ft.m_tilt) : (s.mechanical_tilt!==''&&s.mechanical_tilt!=null ? parseFloat(s.mechanical_tilt) : null);
+      const et = ft.e_tilt!==''&&ft.e_tilt!=null ? parseFloat(ft.e_tilt) : (s.electrical_tilt!==''&&s.electrical_tilt!=null ? parseFloat(s.electrical_tilt) : null);
+      const antH = s.antenna_height!==''&&s.antenna_height!=null ? parseFloat(s.antenna_height) : null;
       const lbl=(s.sector||String.fromCharCode(65+i)).toUpperCase();
       const col=SCOLS[i%4];
       if(!(s.azimuth||s.antenna_azimuth||ft.azimuth)) return;
 
-      const a0=azToCanvas(az-bw/2), a1=azToCanvas(az+bw/2);
+      // Beam splitting: count L-1800 cells for this sector, split auditBw equally
+      const dbCount=(_cellDbBeams[i]||[]).length;
+      const n=dbCount>0?dbCount:1;
+      const sliceW=auditBw/n;
+      const leftEdge=auditAz-auditBw/2;
+      const beams=Array.from({length:n},(_,bi)=>({az:leftEdge+(bi+0.5)*sliceW,bw:sliceW}));
+      console.log('[AudDraw] sector',i,'L-1800 count:',n,'beamwidth each:',sliceW);
 
+      // Draw full sector wedge
+      const secA0=azToCanvas(auditAz-auditBw/2);
+      const secA1=azToCanvas(auditAz+auditBw/2);
       ctx.beginPath();
-      ctx.moveTo(cx+Math.cos(a0)*TOWER_R,cy+Math.sin(a0)*TOWER_R);
-      ctx.arc(cx,cy,R,a0,a1);
-      ctx.lineTo(cx+Math.cos(a1)*TOWER_R,cy+Math.sin(a1)*TOWER_R);
-      ctx.arc(cx,cy,TOWER_R,a1,a0,true);
+      ctx.moveTo(cx+Math.cos(secA0)*TOWER_R,cy+Math.sin(secA0)*TOWER_R);
+      ctx.arc(cx,cy,R,secA0,secA1);
+      ctx.lineTo(cx+Math.cos(secA1)*TOWER_R,cy+Math.sin(secA1)*TOWER_R);
+      ctx.arc(cx,cy,TOWER_R,secA1,secA0,true);
       ctx.closePath();
       ctx.fillStyle=col+'33'; ctx.fill();
       ctx.strokeStyle=col+'cc'; ctx.lineWidth=1.8; ctx.stroke();
 
-      _lq.push({lbl,az,mt,et,col,antH:parseFloat(s.antenna_height)||0});
+      // Draw beam split dividers if multiple beams
+      if(beams.length>1){
+        const sorted=[...beams].sort((a,b)=>a.az-b.az);
+        // Alternating fill per beam
+        const bounds=[secA0];
+        for(let bi=0;bi<sorted.length-1;bi++){
+          bounds.push(azToCanvas((sorted[bi].az+sorted[bi+1].az)/2));
+        }
+        bounds.push(secA1);
+        sorted.forEach((_,bi)=>{
+          ctx.beginPath();
+          ctx.moveTo(cx+Math.cos(bounds[bi])*TOWER_R,cy+Math.sin(bounds[bi])*TOWER_R);
+          ctx.arc(cx,cy,R,bounds[bi],bounds[bi+1]);
+          ctx.lineTo(cx+Math.cos(bounds[bi+1])*TOWER_R,cy+Math.sin(bounds[bi+1])*TOWER_R);
+          ctx.arc(cx,cy,TOWER_R,bounds[bi+1],bounds[bi],true);
+          ctx.closePath();
+          ctx.fillStyle=bi%2===0?col+'50':col+'20'; ctx.fill();
+        });
+        // Divider lines
+        for(let bi=1;bi<bounds.length-1;bi++){
+          const ang=bounds[bi];
+          ctx.strokeStyle='rgba(0,0,0,0.7)'; ctx.lineWidth=2;
+          ctx.beginPath();
+          ctx.moveTo(cx+Math.cos(ang)*TOWER_R,cy+Math.sin(ang)*TOWER_R);
+          ctx.lineTo(cx+Math.cos(ang)*R,cy+Math.sin(ang)*R);
+          ctx.stroke();
+        }
+        // Redraw thick outer border
+        ctx.strokeStyle=col; ctx.lineWidth=2.5;
+        ctx.beginPath();
+        ctx.moveTo(cx+Math.cos(secA0)*TOWER_R,cy+Math.sin(secA0)*TOWER_R);
+        ctx.arc(cx,cy,R,secA0,secA1);
+        ctx.lineTo(cx+Math.cos(secA1)*TOWER_R,cy+Math.sin(secA1)*TOWER_R);
+        ctx.arc(cx,cy,TOWER_R,secA1,secA0,true);
+        ctx.closePath(); ctx.stroke();
+      }
+
+      _lq.push({lbl,az:auditAz,mt,et,col,antH,beamCount:beams.length});
     });
 
-    // Labels
+    // Labels — drawn last so always on top
     _lq.forEach(({lbl,az,mt,et,col,antH})=>{
       const ba=azToCanvas(az);
       const lx=cx+Math.cos(ba)*(R+16), ly=cy+Math.sin(ba)*(R+16);
-      ctx.font='bold 10px system-ui';
       const l1=`${lbl}  ${az}°`;
-      const l2=`H:${antH||'—'}m  M${mt}°  E${et}°`;
-      const lw=Math.max(ctx.measureText(l1).width,ctx.measureText(l2).width)+18;
+      const mtStr=mt!=null?`M${mt}°`:'M—°';
+      const etStr=et!=null?`E${et}°`:'E—°';
+      const hStr=antH!=null?`H:${antH}m`:'H:—m';
+      ctx.font='bold 10px system-ui';
+      const lw=Math.max(ctx.measureText(l1).width,ctx.measureText(hStr+' '+mtStr+' '+etStr).width)+18;
       const lh=34;
       ctx.fillStyle='rgba(15,25,40,0.88)';
       ctx.beginPath();
@@ -5072,15 +5189,17 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
       ctx.fillStyle='#F1F5F9'; ctx.font='bold 10px system-ui'; ctx.textAlign='center';
       ctx.fillText(l1,lx+1,ly-3);
       ctx.font='9px system-ui';
-      const hw=ctx.measureText('H:'+antH+'m').width, mw=ctx.measureText('  M'+mt+'°').width, ew=ctx.measureText('  E'+et+'°').width;
+      const hw=ctx.measureText(hStr).width, mw=ctx.measureText(' '+mtStr).width, ew=ctx.measureText(' '+etStr).width;
       let tx=lx+1-(hw+mw+ew)/2;
-      ctx.fillStyle='#FCD34D'; ctx.fillText('H:'+(antH||'—')+'m',tx+hw/2,ly+10); tx+=hw;
-      ctx.fillStyle='#67E8F9'; ctx.fillText('  M'+mt+'°',tx+mw/2,ly+10); tx+=mw;
-      ctx.fillStyle='#FB923C'; ctx.fillText('  E'+et+'°',tx+ew/2,ly+10);
+      ctx.fillStyle='#FCD34D'; ctx.fillText(hStr,tx+hw/2,ly+10); tx+=hw;
+      ctx.fillStyle='#67E8F9'; ctx.fillText(' '+mtStr,tx+mw/2,ly+10); tx+=mw;
+      ctx.fillStyle='#FB923C'; ctx.fillText(' '+etStr,tx+ew/2,ly+10);
     });
 
-    // Site info panel
-    const lines=[`${audit.site_type||''} · ${audit.tower_type||''}`,`Tower ${th}m`+(bh>0?` + Bldg ${bh}m`:'')];
+    // Site info panel — tower height
+    const thStr=th>0?`Tower ${th}m`:`Tower —m`;
+    const bhStr=bh>0?` + Bldg ${bh}m`:'';
+    const lines=[`${audit.site_type||''} · ${audit.tower_type||''}`,thStr+bhStr];
     ctx.fillStyle='rgba(0,0,0,0.65)';
     ctx.beginPath();
     if(ctx.roundRect) ctx.roundRect(10,10,180,lines.length*18+12,6);
@@ -5097,12 +5216,11 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
     ctx.fillStyle='#fff'; ctx.font='bold 10px system-ui'; ctx.textAlign='center'; ctx.fillText('N',nx,ny-6);
     ctx.restore();
 
-    // Tower dot
+    // Tower centre dot
     ctx.beginPath(); ctx.arc(cx,cy,TOWER_R,0,Math.PI*2);
     ctx.fillStyle='rgba(255,255,255,0.15)'; ctx.fill();
     ctx.strokeStyle='rgba(255,255,255,0.6)'; ctx.lineWidth=1.5; ctx.stroke();
   }
-
   window._audDrawTower=drawTower;
   _audSatMap.on('move zoom moveend zoomend',drawTower);
   setTimeout(()=>{ _audSatMap.invalidateSize(); drawTower(); },300);
