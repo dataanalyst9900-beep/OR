@@ -1767,6 +1767,17 @@ function openBulkUpload(){
         <div id="bulk-preview" style="display:none">
           <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px">Step 3 — Review & Import</div>
           <div id="bulk-preview-content"></div>
+          ${(AUTH?.company||'').toUpperCase()==='CMPAK'?`
+          <div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;padding:14px 16px;margin-top:14px">
+            <div style="font-size:12px;font-weight:700;color:#92400E;margin-bottom:10px">Assign To — overrides target_company column in file</div>
+            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px">
+              ${['LCC','Huawei','ZTE'].map(co=>`<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px;font-weight:700">
+                <input type="radio" name="bulkco" id="bulkco_${co}" value="${co}"
+                  onchange="document.getElementById('bulk-agent-wrap').innerHTML=_bulkAgentDropdown(this.value)">
+                ${co}</label>`).join('')}
+            </div>
+            <div id="bulk-agent-wrap"><div style="font-size:12px;color:#6B7280">LCC activities will go to the coordinator assignment queue.</div></div>
+          </div>`:''}
           <div style="margin-top:16px;display:flex;gap:10px">
             <button class="btn btn-primary" onclick="executeBulkImport()" id="bulk-import-btn" style="font-size:13px">⬆ Import Activities</button>
             <button class="btn btn-outline" onclick="document.getElementById('bulk-preview').style.display='none'" style="font-size:13px">Cancel</button>
@@ -1904,6 +1915,22 @@ function showBulkPreview(rows, headers){
   if(btn){ btn.disabled = validCount===0; btn.textContent='⬆ Import '+validCount+' Activities'; }
 }
 
+function _bulkAgentDropdown(co){
+  if(co==='Huawei'){
+    return `<select id="bulk-agent-sel" style="width:100%;max-width:320px;padding:8px 12px;border:1.5px solid #FED7AA;border-radius:8px;font-size:13px">
+      <option value="">— Select Huawei Person —</option>
+      ${HW_AGENTS.map(u=>`<option value="${escH(u.uid)}">${escH(u.name||u.email)}</option>`).join('')}
+    </select>`;
+  }
+  if(co==='ZTE'){
+    return `<select id="bulk-agent-sel" style="width:100%;max-width:320px;padding:8px 12px;border:1.5px solid #FED7AA;border-radius:8px;font-size:13px">
+      <option value="">— Select ZTE Person —</option>
+      ${ZTE_AGENTS.map(u=>`<option value="${escH(u.uid)}">${escH(u.name||u.email)}</option>`).join('')}
+    </select>`;
+  }
+  return '<div style="font-size:12px;color:#6B7280">LCC activities will go to the coordinator assignment queue.</div>';
+}
+
 async function executeBulkImport(){
   const rows = window._bulkRows || [];
   const validTypes = new Set(ACT_TYPES.map(t=>t.id));
@@ -1928,14 +1955,14 @@ async function executeBulkImport(){
         priority: ['Critical','High','Medium','Low'].includes(r.priority)?r.priority:'Medium',
         poc_name: r.poc_name||null,
         instructions_team: r.instructions_team||null,
-        status: 'open',
         created_by: AUTH.uid,
         created_by_name: AUTH.name,
         company: (()=>{
           // CMPAK uploader: honour target_company from row, else from UI selector
           const _isCmpakBulk=(AUTH?.company||'').toUpperCase()==='CMPAK';
           if(_isCmpakBulk){
-            const _tc=(r.target_company||'').trim()||ACT_ASSIGNEE_CO||'LCC';
+            const _coR=document.querySelector('input[name="bulkco"]:checked');
+            const _tc=(r.target_company||'').trim()||((_coR&&_coR.value)||'LCC');
             const valid=['LCC','Huawei','ZTE'];
             return valid.find(v=>v.toLowerCase()===_tc.toLowerCase())||'LCC';
           }
@@ -1944,26 +1971,33 @@ async function executeBulkImport(){
         target_company: (()=>{
           const _isCmpakBulk=(AUTH?.company||'').toUpperCase()==='CMPAK';
           if(_isCmpakBulk){
-            const _tc=(r.target_company||'').trim()||ACT_ASSIGNEE_CO||'LCC';
+            const _coR=document.querySelector('input[name="bulkco"]:checked');
+            const _tc=(r.target_company||'').trim()||((_coR&&_coR.value)||'LCC');
             const valid=['LCC','Huawei','ZTE'];
             return valid.find(v=>v.toLowerCase()===_tc.toLowerCase())||'LCC';
           }
           return AUTH.company;
         })(),
         created_at: new Date().toISOString(),
-        // HW/ZTE: auto-assign to selected agent if CMPAK uploader
+        // HW/ZTE: auto-assign — read company + agent from DOM at import time
         ...((()=>{
           const _isCmpakBulk=(AUTH?.company||'').toUpperCase()==='CMPAK';
-          if(!_isCmpakBulk) return {assigned_to:null,assigned_to_name:null,assigned_at:null,status:'open'};
-          const _tc=(r.target_company||'').trim()||ACT_ASSIGNEE_CO||'LCC';
+          if(!_isCmpakBulk) return {assigned_to:null,assigned_to_name:null,assigned_at:null};
+          // Read selected company from radio buttons
+          const _coRadio=document.querySelector('input[name="bulkco"]:checked');
+          const _tc=(r.target_company||'').trim()||((_coRadio&&_coRadio.value)||'LCC');
           const _tcUp=_tc.toUpperCase();
           if(_tcUp==='HUAWEI'||_tcUp==='ZTE'){
-            // Use ACT_ASSIGNEE_UID set in the UI selector
-            const _pool=_tcUp==='HUAWEI'?HW_AGENTS:ZTE_AGENTS;
-            const _ag=ACT_ASSIGNEE_UID?_pool.find(x=>x.uid===ACT_ASSIGNEE_UID):null;
-            if(_ag) return {assigned_to:_ag.uid,assigned_to_name:_ag.name||_ag.email,assigned_at:new Date().toISOString(),status:'assigned'};
+            // Read selected agent from dropdown
+            const _sel=document.getElementById('bulk-agent-sel');
+            const _uid=_sel?_sel.value:'';
+            if(_uid){
+              const _pool=_tcUp==='HUAWEI'?HW_AGENTS:ZTE_AGENTS;
+              const _ag=_pool.find(x=>x.uid===_uid);
+              if(_ag) return {assigned_to:_ag.uid,assigned_to_name:_ag.name||_ag.email,assigned_at:new Date().toISOString(),status:'assigned'};
+            }
           }
-          return {assigned_to:null,assigned_to_name:null,assigned_at:null,status:'open'};
+          return {assigned_to:null,assigned_to_name:null,assigned_at:null};
         })()),
       });
       imported++;
