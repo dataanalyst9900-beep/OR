@@ -581,6 +581,107 @@ label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bot
 .badge-blue{background:#DBEAFE;color:#1E40AF;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;}
 .mono{font-family:var(--mono);font-size:12px;}
 
+/* ══ TOAST NOTIFICATION — centre screen modal style ════════ */
+.toast-wrap{
+  position:fixed;inset:0;
+  z-index:9999;
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:none;
+  /* Backdrop blur overlay */
+  background:rgba(17,24,39,0);
+  backdrop-filter:blur(0px);
+  -webkit-backdrop-filter:blur(0px);
+  transition:background .25s ease, backdrop-filter .25s ease;
+}
+.toast-wrap.show{
+  background:rgba(17,24,39,.25);
+  backdrop-filter:blur(6px);
+  -webkit-backdrop-filter:blur(6px);
+  pointer-events:all;
+}
+.toast{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:0;
+  padding:36px 40px 28px;
+  border-radius:28px;
+  background:#fff;
+  box-shadow:0 32px 80px rgba(17,24,39,.2),0 8px 24px rgba(17,24,39,.1);
+  min-width:260px;max-width:320px;text-align:center;
+  opacity:0;transform:scale(.7);
+  transition:opacity .28s cubic-bezier(.34,1.56,.64,1),transform .28s cubic-bezier(.34,1.56,.64,1);
+  pointer-events:all;
+}
+.toast.show{opacity:1;transform:scale(1);}
+.toast.hide{
+  opacity:0;transform:scale(.75);
+  transition:opacity .2s ease,transform .2s ease;
+}
+
+/* Big circle icon */
+.toast-circle{
+  width:72px;height:72px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  margin-bottom:18px;position:relative;
+}
+.toast-success .toast-circle{background:linear-gradient(135deg,#16A34A,#22C55E);}
+.toast-error   .toast-circle{background:linear-gradient(135deg,#E11D48,#F43F5E);}
+
+/* Ripple rings on circle */
+.toast-circle::before,.toast-circle::after{
+  content:'';position:absolute;border-radius:50%;
+  animation:toast-ring 1.4s ease-out infinite;
+}
+.toast-success .toast-circle::before,.toast-success .toast-circle::after{border:2px solid #16A34A;}
+.toast-error   .toast-circle::before,.toast-error   .toast-circle::after{border:2px solid #E11D48;}
+.toast-circle::before{width:100%;height:100%;animation-delay:0s;}
+.toast-circle::after {width:100%;height:100%;animation-delay:.35s;}
+@keyframes toast-ring{
+  0%  {transform:scale(1);opacity:.6;}
+  100%{transform:scale(2.2);opacity:0;}
+}
+
+/* Checkmark SVG */
+.toast-check-svg{width:32px;height:32px;}
+.toast-check-svg path{
+  stroke:#fff;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;fill:none;
+  stroke-dasharray:40;stroke-dashoffset:40;
+  transition:stroke-dashoffset .45s cubic-bezier(.4,0,.2,1) .18s;
+}
+.toast.show .toast-check-svg path{stroke-dashoffset:0;}
+
+/* X mark SVG */
+.toast-x-svg{width:28px;height:28px;}
+.toast-x-svg path{
+  stroke:#fff;stroke-width:3;stroke-linecap:round;fill:none;
+  stroke-dasharray:30;stroke-dashoffset:30;
+  transition:stroke-dashoffset .35s ease .15s;
+}
+.toast.show .toast-x-svg path{stroke-dashoffset:0;}
+
+.toast-title{font-size:15px;font-weight:800;color:var(--text);letter-spacing:-.3px;margin-bottom:4px;}
+.toast-sub{font-size:12.5px;color:var(--muted);font-weight:400;line-height:1.4;}
+
+/* Thin progress ring around circle */
+.toast-ring-svg{
+  position:absolute;inset:-4px;
+  width:calc(100%+8px);height:calc(100%+8px);
+  transform:rotate(-90deg);
+}
+.toast-ring-track{fill:none;stroke:rgba(255,255,255,.25);stroke-width:3;}
+.toast-ring-fill{
+  fill:none;stroke:#fff;stroke-width:3;
+  stroke-linecap:round;
+  stroke-dasharray:207;stroke-dashoffset:0;
+  transition:none;
+}
+.toast.show .toast-ring-fill{
+  animation:toast-countdown 2.2s linear .3s forwards;
+}
+@keyframes toast-countdown{
+  from{stroke-dashoffset:0;}
+  to  {stroke-dashoffset:207;}
+}
+
 @media(max-width:768px){
   .sidebar{display:none;}
   .content{padding:16px;}
@@ -592,6 +693,7 @@ label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bot
 <body>
 
 <!-- LOGIN -->
+<div class="toast-wrap" id="toast-wrap"></div>
 <div id="login-screen">
   <div class="login-box">
     <div class="login-brand">
@@ -1286,8 +1388,21 @@ async function submitActivity() {
     final_report_url:null,final_report_name:null,final_report_at:null
   });
   SUBMITTING=false;
-  SUBMIT_ST=ok?{type:'success',msg:autoAssignUid?`Activity created and assigned to ${autoAssignName}.`:'Activity created successfully.'}:{type:'error',msg:'Failed to create activity.'};
-  if(ok){ACT_TYPE_SEL='';ACT_TITLE='';ACT_DESC='';ACT_SITE='';ACT_REGION='';ACT_PRIORITY='Medium';ACT_POC='';ACT_COMPLAINT_LAT='';ACT_COMPLAINT_LNG='';ACT_COMPLAINT_POC='';ACT_INSTR_TEAM='';ACT_ASSIGNEE_CO='LCC';ACT_ASSIGNEE_UID='';loadActivities();}
+  if(ok){
+    showToast(
+      autoAssignUid ? 'Activity created & assigned!' : 'Activity created!',
+      autoAssignUid ? `Assigned to ${autoAssignName}` : 'Successfully added to the queue',
+      'success'
+    );
+    ACT_TYPE_SEL='';ACT_TITLE='';ACT_DESC='';ACT_SITE='';ACT_REGION='';ACT_PRIORITY='Medium';
+    ACT_POC='';ACT_COMPLAINT_LAT='';ACT_COMPLAINT_LNG='';ACT_COMPLAINT_POC='';
+    ACT_INSTR_TEAM='';ACT_ASSIGNEE_CO='LCC';ACT_ASSIGNEE_UID='';
+    SUBMIT_ST=null;
+    loadActivities();
+  } else {
+    SUBMIT_ST={type:'error',msg:'Failed to create activity.'};
+    showToast('Failed to create activity', 'Please check your connection and try again', 'error');
+  }
   renderPage();
 }
 async function exportActivitiesCSV(){
@@ -2256,14 +2371,13 @@ async function executeBulkImport(){
     } catch(e){ console.error('[bulk]',e); failed++; }
   }
 
+  showToast(
+    failed===0 ? `${imported} activities imported!` : `Import complete with warnings`,
+    failed===0 ? 'All activities added successfully' : `${imported} imported, ${failed} failed`,
+    failed===0 ? 'success' : 'error'
+  );
   const result = document.getElementById('bulk-result');
-  if(result){
-    result.style.display='block';
-    result.innerHTML=`<div style="background:${failed===0?'#D1FAE5':'#FEF3C7'};border:1px solid ${failed===0?'#6EE7B7':'#FCD34D'};border-radius:10px;padding:16px;font-size:13px">
-      <div style="font-weight:700;font-size:15px;color:${failed===0?'#065F46':'#92400E'};margin-bottom:4px">${failed===0?'✅':'⚠️'} Import Complete</div>
-      <div>${imported} activities imported successfully.${failed?' '+failed+' failed.':''}</div>
-    </div>`;
-  }
+  if(result){ result.style.display='none'; }
   document.getElementById('bulk-preview').style.display='none';
   if(btn){ btn.disabled=false; btn.textContent='⬆ Import Activities'; }
   if(imported>0){ loadActivities(); }
@@ -5683,6 +5797,60 @@ document.addEventListener('keydown', e=>{
       break;
   }
 });
+
+// ════════════════════════════════════════════════════════════
+// TOAST NOTIFICATION SYSTEM — Centre screen with blur overlay
+// ════════════════════════════════════════════════════════════
+let _toastTimer = null;
+// Circumference of r=33 circle ≈ 207
+const _RING_C = 207;
+
+function showToast(title, subtitle, type){
+  type = type || 'success';
+  const wrap = document.getElementById('toast-wrap');
+  if(!wrap) return;
+
+  if(_toastTimer){ clearTimeout(_toastTimer); _toastTimer=null; }
+
+  const iconSvg = type === 'success'
+    ? `<svg class="toast-check-svg" viewBox="0 0 32 32"><path d="M6 17l7 7 13-14"/></svg>`
+    : `<svg class="toast-x-svg" viewBox="0 0 28 28"><path d="M7 7l14 14M21 7L7 21"/></svg>`;
+
+  wrap.innerHTML = `
+    <div class="toast toast-${type}" id="toast-card" onclick="dismissToast()">
+      <div class="toast-circle">
+        <!-- Progress ring countdown -->
+        <svg class="toast-ring-svg" viewBox="0 0 80 80">
+          <circle class="toast-ring-track" cx="40" cy="40" r="33"/>
+          <circle class="toast-ring-fill" cx="40" cy="40" r="33" id="toast-ring-fill"/>
+        </svg>
+        ${iconSvg}
+      </div>
+      <div class="toast-title">${title}</div>
+      ${subtitle?`<div class="toast-sub">${subtitle}</div>`:''}
+    </div>`;
+
+  // Trigger animations next frame
+  requestAnimationFrame(()=>{
+    requestAnimationFrame(()=>{
+      wrap.classList.add('show');
+      document.getElementById('toast-card')?.classList.add('show');
+    });
+  });
+
+  // Auto dismiss after 2.5s (ring animation matches)
+  _toastTimer = setTimeout(dismissToast, 2700);
+}
+
+function dismissToast(){
+  const wrap = document.getElementById('toast-wrap');
+  const card = document.getElementById('toast-card');
+  if(!wrap) return;
+  wrap.classList.remove('show');
+  if(card){ card.classList.remove('show'); card.classList.add('hide'); }
+  setTimeout(()=>{ wrap.innerHTML=''; }, 300);
+  if(_toastTimer){ clearTimeout(_toastTimer); _toastTimer=null; }
+}
 
 </script>
 
