@@ -3948,9 +3948,9 @@ async function lmLoadRoutes(){
   if(!date){alert('Please select a date first.');return;}
   lmClearRoutes();
   const agentUid=document.getElementById('lm-route-agent')?.value||'';
-  // Only LCC agents
-  let uids=agentUid?[agentUid]:_lmMembers.map(m=>m.uid);
-  if(!uids.length){alert('No LCC agents found.');return;}
+  // Require a specific agent to be selected — no bulk loading
+  if(!agentUid){alert('Please select a specific agent before loading routes.');return;}
+  let uids=[agentUid];
 
   // ── Progress bar ───────────────────────────────────────────────────
   const loadBtn=document.querySelector('#lm-sidebar button[onclick="lmLoadRoutes()"]');
