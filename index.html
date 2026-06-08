@@ -4516,6 +4516,101 @@ function renderAnalytics(){
   return renderAnalyticsFull();
 }
 
+
+// ── Daily pending activities chart ──────────────────────────────
+// Counts activities not yet completed/cancelled for each calendar day
+function renderDailyPendingChart(data, color){
+  color = color || '#6366F1';
+  const NON_TERMINAL = new Set(['open','assigned','accepted','standby','onhold','reassigned','rejected']);
+  // Build a sorted list of unique dates from created_at
+  const allDates = [...new Set(
+    data.filter(a=>a.created_at).map(a=>a.created_at.slice(0,10))
+  )].sort();
+  if(allDates.length < 2) return '<div style="color:#9CA3AF;font-size:13px;padding:16px;text-align:center">Not enough data for daily trend.</div>';
+
+  // For each date, count activities created on or before that date that are still pending
+  // Limit to last 60 days to keep chart readable
+  const today = new Date().toISOString().slice(0,10);
+  const sixtyDaysAgo = new Date(Date.now()-60*24*3600*1000).toISOString().slice(0,10);
+  const days = [];
+  // Generate a continuous day range for last 60 days (or from first activity if less)
+  const startDate = allDates[0] > sixtyDaysAgo ? allDates[0] : sixtyDaysAgo;
+  let cur = new Date(startDate);
+  const end = new Date(today);
+  while(cur <= end){ days.push(cur.toISOString().slice(0,10)); cur=new Date(cur.getTime()+86400000); }
+
+  const counts = days.map(day=>{
+    return data.filter(a=>{
+      if(!a.created_at) return false;
+      const created = a.created_at.slice(0,10);
+      if(created > day) return false; // not yet created
+      if(!NON_TERMINAL.has(a.status)) return false; // completed or cancelled
+      // If it has a completed_at, check it wasn't completed before this day
+      if(a.completed_at && a.completed_at.slice(0,10) <= day) return false;
+      return true;
+    }).length;
+  });
+
+  const maxCount = Math.max(...counts, 1);
+  const W = 580, H = 130, PAD = 40, RPAD = 10;
+  const chartW = W - PAD - RPAD, chartH = H - 20;
+  const n = days.length;
+  const xPos = i => n > 1 ? (i/(n-1))*chartW + PAD : W/2;
+  const yPos = v => chartH - Math.round((v/maxCount)*(chartH-16)) + 8;
+
+  const pts = counts.map((_,i) => `${xPos(i)},${yPos(counts[i])}`).join(' ');
+  const areaPoints = `${pts} ${xPos(n-1)},${chartH+8} ${xPos(0)},${chartH+8}`;
+
+  // Dots + tooltips only every nth day to avoid clutter
+  const step = Math.max(1, Math.floor(n/10));
+  const dots = days.map((d,i) => {
+    const show = i===0 || i===n-1 || i%step===0;
+    return `<circle cx="${xPos(i)}" cy="${yPos(counts[i])}" r="${show?4:2.5}"
+      fill="${show?color:'#fff'}" stroke="${color}" stroke-width="1.5">
+      <title>${d}: ${counts[i]} pending</title></circle>`;
+  }).join('');
+
+  const labels = days.map((d,i) => {
+    if(i!==0 && i!==n-1 && i%step!==0) return '';
+    return `<text x="${xPos(i)}" y="${H+4}" text-anchor="middle" font-size="8" fill="#9CA3AF">${d.slice(5)}</text>`;
+  }).join('');
+
+  const gridLines = [0,0.25,0.5,0.75,1].map(f=>{
+    const y = chartH - f*(chartH-16)+8;
+    return `<line x1="${PAD}" y1="${y}" x2="${W}" y2="${y}" stroke="#F3F4F6" stroke-width="1"/>
+            <text x="${PAD-4}" y="${y+3}" text-anchor="end" font-size="8" fill="#D1D5DB">${Math.round(f*maxCount)}</text>`;
+  }).join('');
+
+  // Colour: peak days stand out
+  const peak = Math.max(...counts);
+  const peakIdx = counts.lastIndexOf(peak);
+
+  return `<div>
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:10px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#374151">
+        <div style="width:12px;height:3px;background:${color};border-radius:2px"></div>Pending count (daily snapshot)
+      </div>
+      <div style="margin-left:auto;font-size:11px;color:#6B7280">Last ${days.length} days · Peak: <b style="color:${color}">${peak}</b> on ${days[peakIdx]}</div>
+    </div>
+    <div style="overflow-x:auto">
+    <svg width="${W}" height="${H+20}" style="display:block">
+      <defs>
+        <linearGradient id="dpGrad${color.replace('#','')}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${color}" stop-opacity="0.18"/>
+          <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      ${gridLines}
+      <polygon points="${areaPoints}" fill="url(#dpGrad${color.replace('#','')})"/>
+      <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      ${dots}
+      ${labels}
+    </svg>
+    </div>
+
+  </div>`;
+}
+
 function renderAnalyticsFull(){
   if(AN_LOAD) return `<div class="empty-state"><div class="ei">⏳</div><p>Loading analytics…</p></div>`;
   if(!AN_DATA) return `<div class="empty-state"><div class="ei">📊</div><p>
@@ -4827,6 +4922,9 @@ function renderAnalyticsFull(){
         }).join('');
       })()}`
     )}
+
+    <!-- ── Daily Pending Trend ── -->
+    ${SECTION('📈 Daily Pending Activities',renderDailyPendingChart(data,'#6366F1'))}
 
     <!-- ── Monthly Timeline ── -->
     ${SECTION('Monthly Volume',
@@ -5683,6 +5781,21 @@ function renderHwZteAnalytics(){
         </div>
         <div style="font-size:12px;font-weight:700;color:#374151;margin-bottom:8px">By Category</div>
         ${typeBreakdown(zteData)||'<div style="color:#9CA3AF;font-size:12px">No data</div>'}
+      </div>
+    </div>
+
+    <!-- ── Daily Pending Trend ── -->
+    <div style="background:#fff;border-radius:14px;padding:22px;border:1px solid #E5E7EB;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:18px">
+      <div style="font-size:14px;font-weight:800;color:#111827;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid #F3F4F6">📈 Daily Pending Activities</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#E74C3C;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">🔴 Huawei</div>
+          ${renderDailyPendingChart(hwData,'#E74C3C')}
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:700;color:#059669;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">🟢 ZTE</div>
+          ${renderDailyPendingChart(zteData,'#059669')}
+        </div>
       </div>
     </div>
 
