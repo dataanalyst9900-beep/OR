@@ -378,15 +378,19 @@ label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bot
 .badge-accepted{background:var(--teal-bg);color:var(--teal);border-color:var(--teal-b);}
 .badge-open{background:var(--amber-bg);color:var(--amber);border-color:var(--amber-b);}
 .badge-cancelled,.badge-onhold{background:var(--bg2);color:var(--muted);border-color:var(--border2);}
+.badge-standby{background:#FFF7ED;color:#C2410C;border-color:#FED7AA;font-weight:800;animation:standby-badge-flash 1.4s ease-in-out infinite;box-shadow:0 0 0 0 rgba(234,88,12,.4);}
+@keyframes standby-badge-flash{0%,100%{background:#FFF7ED;color:#C2410C;box-shadow:0 0 0 0 rgba(234,88,12,.0);}50%{background:#EA580C;color:#fff;box-shadow:0 0 0 4px rgba(234,88,12,.2);}}
+@keyframes standby-pulse{0%,100%{background:rgba(234,88,12,.0);}50%{background:rgba(234,88,12,.12);}}
+tr.standby-row td{animation:standby-pulse 1.4s ease-in-out infinite;white-space:nowrap;}
 
 /* ══ TABLE ══════════════════════════════════════════════════ */
 .data-table{width:100%;border-collapse:collapse;}
 .data-table th{
-  font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;
-  letter-spacing:.7px;padding:10px 16px;border-bottom:2px solid var(--border);
+  font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid var(--border);
   background:var(--surface2);text-align:left;white-space:nowrap;
 }
-.data-table td{padding:11px 16px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle;color:var(--text2);}
+.data-table td{padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:middle;color:var(--text2);}
 .data-table tr:last-child td{border-bottom:none;}
 .data-table tbody tr{transition:background .1s;}
 .data-table tbody tr:hover td{background:#F5F8FF;}
@@ -943,29 +947,61 @@ const DB = {
     },
     signOut: () => { DB._tok=null; DB._uid=null; }
   },
+  _authHdr: () => ({'apikey':SB_ANON,'Authorization':'Bearer '+(DB._tok||SB_ANON)}),
+  // Silently refresh token on 401 and retry once — fixes the auto-signin blank data bug
+  _on401Retry: async (fn) => {
+    if(!AUTH||!AUTH.refreshToken) return null;
+    const refreshed = await tryRefreshToken(AUTH.refreshToken);
+    if(!refreshed) return null;
+    AUTH.token = refreshed.access_token; AUTH.refreshToken = refreshed.refresh_token;
+    DB._tok = AUTH.token;
+    try{ localStorage.setItem('onroute_auth', JSON.stringify(AUTH)); }catch(e){}
+    console.log('[auth] Token silently refreshed on 401');
+    return fn();
+  },
   get: async (path) => {
-    try {
-      const r = await fetch(SB_URL+path, {headers:{'apikey':SB_ANON,'Authorization':'Bearer '+(DB._tok||SB_ANON)}});
-      if(!r.ok){ console.error('DB.get failed',r.status, path); return []; }
-      return r.json();
-    } catch(e){ console.error('DB.get error',e.message, path); return []; }
+    const _do = async () => {
+      try {
+        const r = await fetch(SB_URL+path, {headers: DB._authHdr()});
+        if(r.status===401) return '__401__';
+        if(!r.ok){ console.error('DB.get failed',r.status, path); return []; }
+        return r.json();
+      } catch(e){ console.error('DB.get error',e.message, path); return []; }
+    };
+    const res = await _do();
+    if(res==='__401__'){ const r2=await DB._on401Retry(_do); return (r2&&r2!=='__401__')?r2:[]; }
+    return res;
   },
   post: async (table, body) => {
-    try {
-      const r = await fetch(SB_URL+'/rest/v1/'+table, {
-        method:'POST', headers:{'apikey':SB_ANON,'Authorization':'Bearer '+(DB._tok||SB_ANON),'Content-Type':'application/json','Prefer':'return=minimal'},
-        body: JSON.stringify(body)
-      });
-      if(!r.ok){ const t=await r.text(); console.error('POST',table,'failed:',t); }
-      return r.ok;
-    } catch(e){ console.error('POST',table,'exception:',e); return false; }
+    const _do = async () => {
+      try {
+        const r = await fetch(SB_URL+'/rest/v1/'+table, {
+          method:'POST', headers:{...DB._authHdr(),'Content-Type':'application/json','Prefer':'return=minimal'},
+          body: JSON.stringify(body)
+        });
+        if(r.status===401) return '__401__';
+        if(!r.ok){ const t=await r.text(); console.error('POST',table,'failed:',t); }
+        return r.ok;
+      } catch(e){ console.error('POST',table,'exception:',e); return false; }
+    };
+    const res = await _do();
+    if(res==='__401__'){ const r2=await DB._on401Retry(_do); return (r2&&r2!=='__401__')?r2:false; }
+    return res;
   },
   patch: async (table, id, body) => {
-    const r = await fetch(SB_URL+'/rest/v1/'+table+'?id=eq.'+id, {
-      method:'PATCH', headers:{'apikey':SB_ANON,'Authorization':'Bearer '+(DB._tok||SB_ANON),'Content-Type':'application/json','Prefer':'return=minimal'},
-      body: JSON.stringify(body)
-    });
-    return r.ok;
+    const _do = async () => {
+      try {
+        const r = await fetch(SB_URL+'/rest/v1/'+table+'?id=eq.'+id, {
+          method:'PATCH', headers:{...DB._authHdr(),'Content-Type':'application/json','Prefer':'return=minimal'},
+          body: JSON.stringify(body)
+        });
+        if(r.status===401) return '__401__';
+        return r.ok;
+      } catch(e){ return false; }
+    };
+    const res = await _do();
+    if(res==='__401__'){ const r2=await DB._on401Retry(_do); return (r2&&r2!=='__401__')?r2:false; }
+    return res;
   }
 };
 
@@ -1056,7 +1092,7 @@ function showApp() {
   showLiveMapTabIfCoordinator();
   try{ const ad=document.getElementById('att-date'); if(ad) ad.value=today(); }catch(e){}
   loadSites(); loadAuditHistory(); loadApproverGrids();
-  ACT_LOAD=true; render(); loadActivities();
+  ACT_LOAD=false; render(); loadActivities();
   if(window._sessionTimer) clearInterval(window._sessionTimer);
 
   // Auto-poll pending approvals every 60s — badge updates silently in background
@@ -1096,11 +1132,11 @@ async function loadSites() {
   if (SSL_CACHE.length) { SSL_LOADED=true; updateSiteCount(); return; }
   let off=0; const all=[];
   while(true) {
-    const r = await fetch(`${SSL_URL}/rest/v1/SSL?select=Site,Grid,SiteTechnology,Latitude,Longitude&order=Site.asc&offset=${off}&limit=1000`,
+    const r = await fetch(`${SSL_URL}/rest/v1/SSL?select=Site,Grid,SiteTechnology,Latitude,Longitude,Region&order=Site.asc&offset=${off}&limit=1000`,
       {headers:{'apikey':SSL_ANON,'Authorization':'Bearer '+SSL_ANON,'Prefer':'count=none'}});
     if(!r.ok) break;
     const arr = await r.json();
-    arr.forEach(row=>{const id=String(row.Site||'').trim();if(id&&id!=='null')all.push({siteId:id,gridId:String(row.Grid||''),siteTech:String(row.SiteTechnology||''),lat:parseFloat(row.Latitude||0),lng:parseFloat(row.Longitude||0)});});
+    arr.forEach(row=>{const id=String(row.Site||'').trim();if(id&&id!=='null')all.push({siteId:id,gridId:String(row.Grid||''),siteTech:String(row.SiteTechnology||''),lat:parseFloat(row.Latitude||0),lng:parseFloat(row.Longitude||0),region:String(row.Region||'')});});
     if(arr.length<1000) break; off+=1000;
   }
   SSL_CACHE=all; SSL_LOADED=true; updateSiteCount();
@@ -2410,7 +2446,7 @@ function switchModule(m){
   MODULE=m;
   if(m==='activity'){ AC_PAGE='dashboard'; loadActivities(); }
   if(m==='analytics'){ AN_PAGE='overview'; loadAnalytics(); }
-  if(m==='audit') A_PAGE='new';
+  if(m==='audit'){ A_PAGE='dashboard_audit'; loadAuditDashboard(); }
 
   render();
 }
@@ -2422,7 +2458,7 @@ function renderSidebar() {
   if(MODULE==='audit'){
     sidebar.innerHTML=`
       <div class="sidebar-label">Site Audit</div>
-      ${[{id:'new',icon:'➕',label:'New Audit'},{id:'history',icon:'🕐',label:'My Audits'},{id:'approvals',icon:'✅',label:'Approvals',badge:PEND_BADGE}].map(n=>
+      ${[{id:'dashboard_audit',icon:'📊',label:'Dashboard'},{id:'new',icon:'➕',label:'New Audit'},{id:'history',icon:'🕐',label:'My Audits'},{id:'approvals',icon:'✅',label:'Approvals',badge:PEND_BADGE}].map(n=>
         `<button class="nav-item ${A_PAGE===n.id?'active':''}" onclick="auditNav('${n.id}')"><span class="ni">${n.icon}</span>${n.label}${n.badge?`<span class="nav-badge">${n.badge}</span>`:''}</button>`
       ).join('')}`;
   } else if(MODULE==='attendance'){
@@ -2465,6 +2501,8 @@ function render() {
     if(A_PAGE==='new')        el.innerHTML=renderAuditNew();
     else if(A_PAGE==='history')    el.innerHTML=renderAuditHistory();
     else if(A_PAGE==='approvals')  el.innerHTML=renderAuditApprovals();
+    else if(A_PAGE==='all_audits')     el.innerHTML=renderAllAudits();
+    else if(A_PAGE==='dashboard_audit') el.innerHTML=renderAuditDashboard();
   } else if(MODULE==='analytics'){
     el.innerHTML=renderAnalytics();
   } else if(MODULE==='attendance'){
@@ -2478,7 +2516,10 @@ function render() {
     else if(AC_PAGE==='all_activities') el.innerHTML=renderAllActivities();
     else if(AC_PAGE==='assign')         el.innerHTML=renderAssignActivities();
   }
-  renderModal();
+  // NOTE: renderModal() deliberately NOT called here.
+  // Modals manage their own DOM lifecycle via explicit open/close calls.
+  // Calling renderModal() on every render() was destroying Leaflet maps
+  // and causing infinite loading loops whenever background state changed.
   // (audit-search-static visibility handled at top of render())
   // Update site count
   const sc = document.getElementById('site-count');
@@ -2494,7 +2535,30 @@ function render() {
 function renderPage(){render();}
 
 function auditNav(p){
-  A_PAGE=p;if(p==='history')loadAuditHistory();if(p==='approvals'){if(APPROVER_GRIDS.length===0)loadApproverGrids();else loadPending();}render();
+  A_PAGE=p;
+  if(p==='history') loadAuditHistory();
+  if(p==='approvals'){if(APPROVER_GRIDS.length===0)loadApproverGrids();else loadPending();}
+  if(p==='all_audits') loadAllAudits();
+  if(p==='dashboard_audit') loadAuditDashboard();
+  render();
+}
+let ALL_AUDITS_LIST=[], ALL_AUDITS_LOAD=false;
+let AUDIT_DASH_DATA=null, AUDIT_DASH_LOAD=false;
+
+async function loadAllAudits(){
+  if(ALL_AUDITS_LOAD) return;
+  ALL_AUDITS_LOAD=true; render();
+  ALL_AUDITS_LIST = await DB.get('/rest/v1/site_audits?order=submitted_at.desc&limit=500') || [];
+  ALL_AUDITS_LOAD=false; render();
+}
+
+async function loadAuditDashboard(){
+  if(AUDIT_DASH_LOAD) return;
+  AUDIT_DASH_LOAD=true; if(MODULE==='audit') render();
+  try{
+    AUDIT_DASH_DATA = await DB.get('/rest/v1/site_audits?order=submitted_at.desc&limit=1000') || [];
+  }catch(e){ console.error('[auditDash]',e); AUDIT_DASH_DATA=[]; }
+  AUDIT_DASH_LOAD=false; if(MODULE==='audit') render();
 }
 function actNav(p){AC_PAGE=p;if(p==='analytics_act'){if(!AN_DATA&&!AN_LOAD)loadAnalytics();render();}else if(p==='analytics_hwzte'){if((AUTH?.company||'').toUpperCase()==='CMPAK'){if(!HW_ZTE_AN_DATA&&!HW_ZTE_AN_LOAD)loadHwZteAnalytics();render();}else{AC_PAGE='dashboard';render();}}else{loadActivities();}}
 function analyticsNav(p){AN_PAGE=p;render();}
@@ -2529,7 +2593,7 @@ function escH(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
 function fmtDate(iso){return iso?iso.slice(0,10):'—';}
 function fmtDT(iso){return iso?iso.slice(0,16).replace('T',' '):'—';}
 function statusBadge(s){
-  const m={approved:'badge-approved ✓ Approved',rejected:'badge-rejected ✕ Rejected',pending_approval:'badge-pending ⏳ Pending',assigned:'badge-assigned 👤 Assigned',accepted:'badge-accepted ▶ Accepted',completed:'badge-completed ✓ Completed',open:'badge-open 📌 Open',cancelled:'badge-cancelled ✕ Cancelled',onhold:'badge-onhold ⏸ On Hold',reassigned:'badge-reassigned ↺ Reassigned'};
+  const m={approved:'badge-approved ✓ Approved',rejected:'badge-rejected ✕ Rejected',pending_approval:'badge-pending ⏳ Pending',assigned:'badge-assigned 👤 Assigned',accepted:'badge-accepted ▶ Accepted',completed:'badge-completed ✓ Completed',open:'badge-open 📌 Open',cancelled:'badge-cancelled ✕ Cancelled',onhold:'badge-onhold ⏸ On Hold',reassigned:'badge-reassigned ↺ Reassigned',standby:'badge-standby ⏸ Stand By'};
   const v=m[s]||'badge-pending '+s; const[cls,...rest]=v.split(' ');
   return`<span class="badge ${cls}">${rest.join(' ')}</span>`;
 }
@@ -2720,7 +2784,7 @@ function coTag(a){
 
 function renderDashboard(){
   if(ACT_LOAD)return`<div class="empty-state"><div class="ei">⏳</div><p>Loading…</p></div>`;
-  const isCoordinator=AUTH&&AUTH.isCoordinator&&(AUTH?.company||'').toUpperCase()==='CMPAK';
+  const isCoordinator=AUTH&&AUTH.isCoordinator; // All coordinators can edit in dashboard
   const isCmpak=(AUTH?.company||'').toUpperCase()==='CMPAK';
   const myUid = AUTH ? AUTH.uid : null;
 
@@ -2786,7 +2850,7 @@ ${myPending.length>0?`
   <div style="overflow-x:auto"><table class="data-table">
   <thead><tr><th>Type</th><th>Title</th><th>Region</th><th>Priority</th><th>Assigned By</th><th>Instructions</th><th>Action</th></tr></thead>
   <tbody>${myPending.map(a=>{const t=actTypeLabel(a.type);return`<tr style="background:#FFFBEB">
-    <td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
+    <td style="white-space:normal"><div style="font-size:16px;line-height:1">${t.icon}</div><div style="font-size:10.5px;font-weight:600;color:var(--text2);margin-top:2px;line-height:1.25">${t.label}</div></td>
     <td><b>${escH(a.title||'—')}</b>${a.site_id?`<div style="font-size:11px;color:var(--muted)">${escH(a.site_id)}</div>`:''}</td>
     <td style="font-size:12px;color:var(--muted)">${escH(a.region||'—')}</td>
     <td><span class="tag">${escH(a.priority||'—')}</span></td>
@@ -2806,9 +2870,9 @@ ${(()=>{
 
   function actRow(a){
     const t=actTypeLabel(a.type);const idx=ALL_ACTS.indexOf(a);
-    return `<tr>
-      <td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
-      <td><b>${escH(a.title||'—')}</b></td>
+    return `<tr class="${a.status==='standby'?'standby-row':''}">
+      <td style="white-space:normal"><div style="font-size:16px;line-height:1">${t.icon}</div><div style="font-size:10.5px;font-weight:600;color:var(--text2);margin-top:2px;line-height:1.25">${t.label}</div></td>
+      <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:0"><b title="${escH(a.title||'—')}">${escH(a.title||'—')}</b></td>
       <td style="font-size:12px;color:var(--muted)">${escH(a.region||'—')}</td>
       <td style="font-family:var(--mono);font-size:12px">${escH(a.site_id||'—')}</td>
       <td><span class="tag">${escH(a.priority||'—')}</span></td>
@@ -2816,6 +2880,7 @@ ${(()=>{
       <td style="font-size:12px;color:var(--muted)">${escH(a.assigned_to_name||'—')}</td>
       ${isCmpak?`<td>${coTag(a)}</td>`:''}
       <td style="font-size:12px;color:var(--muted)">${escH(a.poc_name||'—')}</td>
+      <td style="font-size:12px;color:var(--muted)">${a.assigned_at?fmtDate(a.assigned_at):'—'}</td>
       <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-outline btn-sm" onclick="openActDetail(${idx},'all')">View</button>
@@ -2825,23 +2890,29 @@ ${(()=>{
     </tr>`;
   }
 
-  const tableHead = `<thead><tr>
+  const tableHead = `<colgroup>
+    <col style="width:80px"><col style="width:180px"><col style="width:90px"><col style="width:70px">
+    <col style="width:80px"><col style="width:100px"><col style="width:130px">
+    ${isCmpak?'<col style="width:90px">':''}
+    <col style="width:110px"><col style="width:90px"><col style="width:90px"><col style="width:130px">
+  </colgroup>
+  <thead><tr>
     <th>Type</th><th>Title</th><th>Region</th><th>Site</th>
     <th>Priority</th><th>Status</th><th>Assigned To</th>
     ${isCmpak?'<th>Company</th>':''}
-    <th>CMPAK POC</th><th>Created</th><th></th>
+    <th>CMPAK POC</th><th>Assigned</th><th>Created</th><th></th>
   </tr></thead>`;
 
   return `
     ${assigned.length?`
     <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px">✅ Assigned Activities <span style="font-size:11px;font-weight:400;color:#6B7280">(${assigned.length})</span></div>
-    <div class="card" style="margin-bottom:18px"><div style="overflow-x:auto"><table class="data-table">
+    <div class="card" style="margin-bottom:18px"><div style="overflow:visible"><table class="data-table" style="table-layout:fixed;width:100%">
     ${tableHead}<tbody>${assigned.map(actRow).join('')}</tbody></table></div></div>`
     :`<div class="empty-state" style="padding:20px"><div class="ei" style="font-size:24px">✅</div><p style="font-size:13px">No assigned activities${isCmpak&&window._dashTab!=='all'?' for '+window._dashTab:''}.</p></div>`}
 
     <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:8px;margin-top:4px">⚠️ Unassigned Activities <span style="font-size:11px;font-weight:400;color:#6B7280">(${unassigned.length})</span></div>
     ${unassigned.length?`
-    <div class="card"><div style="overflow-x:auto"><table class="data-table">
+    <div class="card"><div style="overflow:visible"><table class="data-table" style="table-layout:fixed;width:100%">
     ${tableHead}<tbody>${unassigned.map(actRow).join('')}</tbody></table></div></div>`
     :`<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:14px 18px;font-size:13px;color:#92400E">No unassigned activities${isCmpak&&window._dashTab!=='all'?' for '+window._dashTab:''}. 🎉</div>`}
   `;
@@ -3009,8 +3080,8 @@ ${!MY_ACTS.length?`<div class="empty-state"><div class="ei">📋</div><p>No acti
 <div class="card"><table class="data-table">
 <thead><tr><th>Type</th><th>Title</th><th>Site</th><th>Priority</th><th>Status</th><th>Assigned To</th><th>Created</th><th></th></tr></thead>
 <tbody>${MY_ACTS.map((a,i)=>{const t=actTypeLabel(a.type);return`<tr>
-<td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
-<td><b>${escH(a.title||'—')}</b></td>
+<td style="white-space:normal"><div style="font-size:16px;line-height:1">${t.icon}</div><div style="font-size:10.5px;font-weight:600;color:var(--text2);margin-top:2px;line-height:1.25">${t.label}</div></td>
+<td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:0"><b title="${escH(a.title||'—')}">${escH(a.title||'—')}</b></td>
 <td style="font-family:var(--mono);font-size:12px">${escH(a.site_id||'—')}</td>
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
 <td>${statusBadge(a.status||'open')}</td>
@@ -3052,7 +3123,7 @@ ${isCmpak?`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
 </div>
 ${!filtered.length?`<div class="empty-state"><div class="ei">📋</div><p>No activities yet.</p></div>`:`
 <div class="card" style="overflow-x:auto"><table class="data-table" style="min-width:900px">
-<thead><tr><th>Type</th><th>Title</th><th>Region</th><th>POC</th><th>Assigned To</th><th>Priority</th><th>Status</th><th>Company</th><th>📁 Log</th><th>📄 Report</th><th>Date</th><th></th></tr></thead>
+<thead><tr><th>Type</th><th>Title</th><th>Region</th><th>POC</th><th>Assigned To</th><th>Priority</th><th>Status</th><th>Company</th><th>📁 Log</th><th>📄 Report</th><th>Created</th><th>Assigned</th><th></th></tr></thead>
 <tbody id='act-tbody'>${filtered.map((a,i)=>{
   const t=actTypeLabel(a.type);
   const idx=ALL_ACTS.indexOf(a);
@@ -3063,7 +3134,7 @@ ${!filtered.length?`<div class="empty-state"><div class="ei">📋</div><p>No act
     ?`<span style="color:var(--success);font-size:11px;font-weight:600">✓ Shared</span>`
     :`<span style="color:var(--warn);font-size:11px;font-weight:600">⏳ Pending</span>`;
   return`<tr>
-<td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
+<td style="white-space:normal"><div style="font-size:16px;line-height:1">${t.icon}</div><div style="font-size:10.5px;font-weight:600;color:var(--text2);margin-top:2px;line-height:1.25">${t.label}</div></td>
 <td><b>${escH(a.title||'—')}</b>${a.site_id?`<div style="font-size:11px;color:var(--muted);font-family:monospace">${escH(a.site_id)}</div>`:''}</td>
 <td style="font-size:12px">${escH(a.region||'—')}</td>
 <td style="font-size:12px;color:var(--muted)">${escH(a.poc_name||'—')}</td>
@@ -3071,7 +3142,7 @@ ${!filtered.length?`<div class="empty-state"><div class="ei">📋</div><p>No act
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
 <td>${statusBadge(a.status||'open')}</td>
 <td><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:${(a.target_company||a.company||'').toUpperCase()==='HUAWEI'?'#FEE2E2':(a.target_company||a.company||'').toUpperCase()==='ZTE'?'#D1FAE5':'#DBEAFE'};color:${(a.target_company||a.company||'').toUpperCase()==='HUAWEI'?'#991B1B':(a.target_company||a.company||'').toUpperCase()==='ZTE'?'#065F46':'#1E40AF'}">${escH(a.target_company||a.company||'—')}</span></td>
-<td>${logStatus}</td>
+<td style="font-size:12px;color:var(--muted)">${a.assigned_at?fmtDate(a.assigned_at):'—'}</td><td>${logStatus}</td>
 <td>${repStatus}</td>
 <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
 <td style="display:flex;gap:4px;flex-wrap:wrap">
@@ -3101,7 +3172,7 @@ ${!needsAction.length?`<div class="empty-state"><div class="ei">✅</div><p>All 
 <div class="card"><div style="overflow-x:auto"><table class="data-table">
 <thead><tr><th>Type</th><th>Title</th><th>Created By</th><th>Priority</th><th>Status</th><th>Created</th><th>Action</th></tr></thead>
 <tbody>${needsAction.map((a)=>{const t=actTypeLabel(a.type);return`<tr>
-<td>${t.icon} <span style="font-size:12px">${t.label}</span></td>
+<td style="white-space:normal"><div style="font-size:16px;line-height:1">${t.icon}</div><div style="font-size:10.5px;font-weight:600;color:var(--text2);margin-top:2px;line-height:1.25">${t.label}</div></td>
 <td><b>${escH(a.title||'—')}</b>${a.site_id?`<div style="font-size:11px;color:var(--muted);font-family:var(--mono)">${escH(a.site_id)}</div>`:''}</td>
 <td style="font-size:12px;color:var(--muted)">${escH(a.created_by_name||'—')}</td>
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
@@ -3219,21 +3290,91 @@ async function reassignActivity(actId){
 }
 function closeModal(){MODAL=null;document.getElementById('modal-root').innerHTML='';}
 
-function openPhotoZoom(url) {
+function openPhotoZoom(url, allUrls) {
   if(!url) return;
-  var ov=document.getElementById('photo-zoom-ov');
-  if(!ov){ov=document.createElement('div');ov.id='photo-zoom-ov';document.body.appendChild(ov);}
-  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:10000;display:flex;align-items:center;justify-content:center';
-  ov.style.display='flex';
-  ov.onclick=function(e){if(e.target===ov)closePhotoZoom();};
-  var img=document.createElement('img');
-  img.src=url; img.onclick=function(e){e.stopPropagation();};
-  img.style.cssText='max-width:95vw;max-height:90vh;border-radius:8px;object-fit:contain;box-shadow:0 8px 40px rgba(0,0,0,.8)';
-  var btn=document.createElement('button');
-  btn.innerHTML='&#x2715;&nbsp;Close'; btn.onclick=closePhotoZoom;
-  btn.style.cssText='position:fixed;top:16px;right:20px;background:rgba(0,0,0,.6);border:2px solid rgba(255,255,255,.5);color:#fff;font-size:14px;font-weight:700;padding:8px 18px;border-radius:8px;cursor:pointer;z-index:10001';
-  ov.innerHTML=''; ov.appendChild(img); ov.appendChild(btn);
+  // allUrls can be a JSON string (from inline onclick) or an array
+  if(typeof allUrls === 'string'){try{allUrls=JSON.parse(allUrls);}catch(e){allUrls=null;}}
+  // Build list of all photos in this audit for prev/next
+  window._lbUrls = allUrls && allUrls.length ? allUrls.filter(Boolean) : [url];
+  window._lbIdx  = window._lbUrls.indexOf(url);
+  if(window._lbIdx < 0) window._lbIdx = 0;
+  _renderLightbox();
 }
+
+function _renderLightbox(){
+  var urls = window._lbUrls || [];
+  var idx  = window._lbIdx  || 0;
+  var url  = urls[idx] || '';
+  if(!url) return;
+
+  var ov = document.getElementById('photo-zoom-ov');
+  if(!ov){
+    ov = document.createElement('div');
+    ov.id = 'photo-zoom-ov';
+    document.body.appendChild(ov);
+  }
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.94);z-index:10000;display:flex;align-items:center;justify-content:center';
+  ov.onclick = function(e){ if(e.target===ov) closePhotoZoom(); };
+
+  var img = document.createElement('img');
+  img.src = url;
+  img.onclick = function(e){ e.stopPropagation(); };
+  img.style.cssText = 'max-width:88vw;max-height:84vh;border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.6);user-select:none;';
+
+  // Close button
+  var closeBtn = document.createElement('button');
+  closeBtn.innerHTML = '✕';
+  closeBtn.style.cssText = 'position:absolute;top:16px;right:20px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;font-size:18px;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)';
+  closeBtn.onclick = closePhotoZoom;
+
+  // Counter
+  var counter = document.createElement('div');
+  counter.style.cssText = 'position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.5);color:rgba(255,255,255,.8);font-size:12px;font-weight:600;padding:4px 12px;border-radius:20px;font-family:system-ui;backdrop-filter:blur(4px)';
+  counter.textContent = (idx+1) + ' / ' + urls.length;
+
+  ov.innerHTML = '';
+  ov.appendChild(img);
+  ov.appendChild(closeBtn);
+  if(urls.length > 1) ov.appendChild(counter);
+
+  // Prev/Next arrows
+  if(urls.length > 1){
+    ['prev','next'].forEach(dir=>{
+      var btn = document.createElement('button');
+      btn.innerHTML = dir==='prev' ? '&#8592;' : '&#8594;';
+      btn.style.cssText = 'position:absolute;'+(dir==='prev'?'left:16px':'right:16px')+';top:50%;transform:translateY(-50%);background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:22px;width:48px;height:48px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);transition:background .15s';
+      btn.onmouseover = function(){ this.style.background='rgba(255,255,255,.25)'; };
+      btn.onmouseout  = function(){ this.style.background='rgba(255,255,255,.12)'; };
+      btn.onclick = function(e){
+        e.stopPropagation();
+        window._lbIdx = dir==='prev'
+          ? (window._lbIdx - 1 + urls.length) % urls.length
+          : (window._lbIdx + 1) % urls.length;
+        _renderLightbox();
+      };
+      btn.onclick = btn.onclick;
+      ov.appendChild(btn);
+    });
+  }
+}
+
+// Arrow key navigation for lightbox
+document.addEventListener('keydown', function(e){
+  const ov = document.getElementById('photo-zoom-ov');
+  if(!ov || ov.style.display==='none') return;
+  if(e.key==='Escape') { closePhotoZoom(); }
+  else if(e.key==='ArrowRight'||e.key==='ArrowDown'){
+    if(window._lbUrls && window._lbUrls.length>1){
+      window._lbIdx=(window._lbIdx+1)%window._lbUrls.length; _renderLightbox();
+    }
+  }
+  else if(e.key==='ArrowLeft'||e.key==='ArrowUp'){
+    if(window._lbUrls && window._lbUrls.length>1){
+      window._lbIdx=(window._lbIdx-1+window._lbUrls.length)%window._lbUrls.length; _renderLightbox();
+    }
+  }
+});
+
 function closePhotoZoom(){
   var ov=document.getElementById('photo-zoom-ov');
   if(ov){ov.innerHTML='';ov.style.display='none';}
@@ -3285,6 +3426,19 @@ async function reopenActivity(id) {
 function renderModal(){
   const mc=document.getElementById('modal-root'); if(!MODAL){mc.innerHTML='';return;}
   const m=MODAL;
+  try {
+    _renderModalInner(mc, m);
+  } catch(err) {
+    console.error('[renderModal] Exception:', err);
+    mc.innerHTML = `<div class="modal-bg"><div class="modal" style="max-width:460px">
+      <div class="modal-hdr"><h3>⚠ Display Error</h3><button class="btn-x" onclick="closeModal()">✕</button></div>
+      <div class="modal-body"><p style="color:var(--danger);font-size:13px">Failed to render modal: ${err.message}</p>
+      <pre style="font-size:11px;color:var(--muted);margin-top:8px;overflow:auto;max-height:200px">${escH(err.stack||'')}</pre></div>
+      <div class="modal-ftr"><button class="btn btn-outline" onclick="closeModal()">Close</button></div>
+    </div></div>`;
+  }
+}
+function _renderModalInner(mc, m){
 
   if(m.type==='reject'){
     mc.innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:420px">
@@ -3335,51 +3489,119 @@ _assignPool.map(ag=>`<div style="display:flex;align-items:center;justify-content
         })
       : ['4G','3G','2G'];  // no SSL entry → default no 5G assumption
 
-    mc.innerHTML=`<div class="modal-bg"><div class="modal">
-<div class="modal-hdr"><h3>📋 Audit — ${escH(a.site_id)}</h3><button class="btn-x" onclick="closeModal()">✕</button></div>
+    mc.innerHTML=`<div class="modal-bg" style="align-items:center;padding:20px"><div class="modal" style="max-width:860px;width:100%;max-height:90vh;border-radius:16px;box-shadow:0 32px 80px rgba(17,24,39,.35),0 8px 24px rgba(17,24,39,.18),0 0 0 1px rgba(255,255,255,.08)">
+<div class="modal-hdr" style="background:linear-gradient(135deg,#0F172A,#1E3A5F);border-radius:16px 16px 0 0;flex-shrink:0">
+  <div>
+    <div style="font-size:10px;font-weight:700;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">Site Audit Report</div>
+    <h3 style="color:#fff;font-size:18px;font-weight:900;letter-spacing:-.4px">Site ${escH(String(a.site_id))}</h3>
+    <div style="font-size:12px;color:rgba(255,255,255,.55);margin-top:2px">${escH(a.region||'')}${a.grid_id?' · '+escH(a.grid_id):''}${a.submitted_at?' · Audited '+fmtDT(a.submitted_at)+' by '+escH(a.submitted_by_name||''):''}</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px">
+    ${a.status?`<span class="badge badge-${a.status==='approved'?'approved':a.status==='rejected'?'rejected':'pending'}">${a.status==='approved'?'✅ Approved':a.status==='rejected'?'✕ Rejected':'⏳ Pending'}</span>`:''}
+    <button class="btn-x" onclick="closeModal()" style="color:rgba(255,255,255,.7);background:rgba(255,255,255,.1);border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border:none;cursor:pointer;font-size:16px;transition:background .15s" onmouseover="this.style.background='rgba(255,255,255,.2)'" onmouseout="this.style.background='rgba(255,255,255,.1)'">✕</button>
+  </div></div>
 <div class="modal-body">
-<div class="detail-block"><div class="detail-row">
-<div class="detail-field"><div class="dk">Site ID</div><div class="dv" style="font-family:var(--mono)">${escH(a.site_id||'—')}</div></div>
-<div class="detail-field"><div class="dk">Grid</div><div class="dv">${escH(a.grid_id||'—')}</div></div>
-<div class="detail-field"><div class="dk">Site Type</div><div class="dv">${escH(a.site_type||'—')}</div></div>
-<div class="detail-field"><div class="dk">Tower Type</div><div class="dv">${escH(a.tower_type||'—')}</div></div>
-<div class="detail-field"><div class="dk">Tower Height</div><div class="dv">${a.tower_height!==''&&a.tower_height!=null?escH(String(a.tower_height))+'m':'—'}</div></div>
+<div class="detail-block">
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px 16px">
+  <div class="detail-field"><div class="dk">Site ID</div><div class="dv" style="font-family:var(--mono)">${escH(a.site_id||'—')}</div></div>
+  <div class="detail-field"><div class="dk">Grid</div><div class="dv">${escH(a.grid_id||'—')}</div></div>
+  <div class="detail-field"><div class="dk">Site Type</div><div class="dv">${escH(a.site_type||'—')}</div></div>
+  <div class="detail-field"><div class="dk">Tower Type</div><div class="dv">${escH(a.tower_type||'—')}</div></div>
+  <div class="detail-field"><div class="dk">Tower Height</div><div class="dv">${a.tower_height!==''&&a.tower_height!=null?escH(String(a.tower_height))+'m':'—'}</div></div>
+  <div class="detail-field"><div class="dk">Auditor</div><div class="dv">${escH(a.submitted_by_name||'—')}</div></div>
+  <div class="detail-field"><div class="dk">Company</div><div class="dv">${escH(a.company||'—')}</div></div>
+  <div class="detail-field"><div class="dk">Audited On</div><div class="dv">${fmtDT(a.submitted_at)}</div></div>
+  <div class="detail-field"><div class="dk">Status</div><div class="dv">${statusBadge(a.status)}</div></div>
+  ${a.approved_at?`<div class="detail-field"><div class="dk">Approved On</div><div class="dv" style="color:var(--green)">${fmtDate(a.approved_at)}</div></div>`:'<div></div>'}
 </div>
-<div class="detail-row" style="margin-top:10px">
-<div class="detail-field"><div class="dk">By</div><div class="dv">${escH(a.submitted_by_name||'—')}</div></div>
-<div class="detail-field"><div class="dk">Date</div><div class="dv">${fmtDT(a.submitted_at)}</div></div>
-<div class="detail-field"><div class="dk">Status</div><div class="dv">${statusBadge(a.status)}</div></div>
+${a.remarks?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)"><div class="dk">Auditor Remarks</div><div style="font-size:13px;margin-top:3px;color:var(--text2)">${escH(a.remarks)}</div></div>`:''}
+${a.approver_remarks?`<div class="${a.status==='rejected'?'reject-box':'approve-box'}" style="margin-top:10px"><b>${a.status==='rejected'?'✕ Rejection Reason':'✓ Approver Remarks'}:</b> ${escH(a.approver_remarks)}</div>`:''}
 </div>
-${a.remarks?`<div style="margin-top:10px"><div class="dk">Remarks</div><div style="font-size:13px;margin-top:3px">${escH(a.remarks)}</div></div>`:''}
-${a.approver_remarks?`<div class="${a.status==='rejected'?'reject-box':'approve-box'}" style="margin-top:10px"><b>${a.status==='rejected'?'Rejection Reason':'Approver Remarks'}:</b> ${escH(a.approver_remarks)}</div>`:''}
+
+<!-- ── Version history bar ── -->
+<div style="background:#F8FAFC;border-bottom:1px solid var(--border);padding:10px 22px;display:flex;align-items:center;gap:10px;flex-wrap:wrap" id="audit-versions-bar">
+  <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Versions:</span>
+  <span style="font-size:12px;color:var(--muted)">Loading…</span>
 </div>
-${(()=>{
-  // Use SSL-derived techs — already computed above as siteShowTechs
-  const showTechs = siteShowTechs;
-  return secs.map(sec=>`<hr class="sep"/>
-<div><b style="font-size:13px">Sector ${escH(sec.sector)}</b>
-<div style="overflow-x:auto;margin-top:8px">
-<table style="width:100%;border-collapse:collapse;min-width:400px;font-size:12px">
-<thead><tr><th style="padding:6px 10px;background:var(--bg);border-bottom:1px solid var(--border);text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase">Field</th>
-${showTechs.map(t=>`<th style="padding:6px 8px;background:var(--bg);border-bottom:1px solid var(--border);text-align:center;font-size:11px;color:var(--muted);text-transform:uppercase">${t}</th>`).join('')}</tr></thead>
-<tbody><tr style="background:var(--bg2,#F9FAFB)"><td style="padding:6px 10px;font-weight:600;border-bottom:1px solid var(--border)">Antenna Height</td>${showTechs.map(()=>`<td style="padding:6px 8px;text-align:center;border-bottom:1px solid var(--border)">${sec.antenna_height!==''&&sec.antenna_height!=null?escH(String(sec.antenna_height))+'m':'—'}</td>`).join('')}</tr>${[['Antenna','antenna_type'],['Azimuth','azimuth'],['M.Tilt','m_tilt'],['E.Tilt','e_tilt']].map(([lbl,key])=>`<tr>
-<td style="padding:5px 10px;color:var(--muted);border-bottom:1px solid var(--border);font-weight:600">${lbl}</td>
-${showTechs.map(t=>{const td=sec['tech_'+t.toLowerCase()];return`<td style="padding:5px 8px;text-align:center;border-bottom:1px solid var(--border);font-family:var(--mono)">${escH((td&&td[key])||'—')}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>
-${sec.photo_url?`<div style="margin-top:8px"><img src="${escH(sec.photo_url)}" class="photo-thumb" onclick="openPhotoZoom(this.src)"/></div>`:''}</div>`).join('');
-})()}
+
 ${(function(){
   var tp=a.tower_photo_url;
   var allLegs=[a.leg1_photo_url,a.leg2_photo_url,a.leg3_photo_url,a.leg4_photo_url];
   if(!tp && !allLegs.some(Boolean)) return '';
+  // Store URLs on window so onclick can access them at click time
+  window._lbTowerUrls=[tp].concat(allLegs).filter(Boolean);
   var h='<hr style="border:none;border-top:1px solid #E2E8F0;margin:16px 0"/>';
-  h+='<div style="font-size:13px;font-weight:700;margin-bottom:10px">&#x1F5FC; Tower &amp; Leg Photos</div>';
-  h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px">';
-  if(tp) h+='<div style="text-align:center"><img src="'+tp+'" style="width:100%;height:90px;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid #E2E8F0" onclick="openPhotoZoom(this.src)"/><div style="font-size:11px;color:#64748B;margin-top:3px;font-weight:600">Tower</div></div>';
+  h+='<div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--accent);margin-bottom:10px">🏗 Tower &amp; Leg Photos</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px">';
+  if(tp) h+='<div style="text-align:center"><img src="'+tp+'" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid #E2E8F0" onclick="openPhotoZoom(this.src,window._lbTowerUrls)"/><div style="font-size:11px;color:#64748B;margin-top:3px;font-weight:600">🏗 Tower</div></div>';
   allLegs.forEach(function(url,i){
     if(!url) return;
-    h+='<div style="text-align:center"><img src="'+url+'" style="width:100%;height:90px;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid #E2E8F0" onclick="openPhotoZoom(this.src)"/><div style="font-size:11px;color:#64748B;margin-top:3px;font-weight:600">Leg '+(i+1)+'</div></div>';
+    h+='<div style="text-align:center"><img src="'+url+'" style="width:100%;height:120px;object-fit:cover;border-radius:6px;cursor:pointer;border:1px solid #E2E8F0" onclick="openPhotoZoom(this.src,window._lbTowerUrls)"/><div style="font-size:11px;color:#64748B;margin-top:3px;font-weight:600">Leg '+(i+1)+'</div></div>';
   });
   return h+'</div>';
+})()}
+
+
+${(()=>{
+  const showTechs=siteShowTechs;
+  const SCOLS=['#2563EB','#16A34A','#EA580C','#7C3AED','#EAB308','#EC4899'];
+  const SBGS =['#EFF6FF','#F0FDF4','#FFF7ED','#F5F3FF','#FFFBEB','#FDF2F8'];
+  if(!secs.length) return '<div style="padding:16px;color:var(--muted);font-size:13px">No sector data recorded.</div>';
+
+  return `
+<hr class="sep"/>
+<div style="font-size:13px;font-weight:800;color:var(--text);margin-bottom:12px">Sector Details</div>
+<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+${secs.map((sec,si)=>{
+  const col=SCOLS[si%SCOLS.length];
+  const bg=SBGS[si%SBGS.length];
+  const lbl=(sec.sector||String.fromCharCode(65+si)).toUpperCase();
+  const antH=sec.antenna_height!==''&&sec.antenna_height!=null?sec.antenna_height:null;
+  const photoUrl=sec.photo_url||null;
+
+  // Build tech rows
+  const techRows=showTechs.map(t=>{
+    const td=sec['tech_'+t.toLowerCase()]||{};
+    const az=td.azimuth!==undefined&&td.azimuth!==''?td.azimuth:'—';
+    const mt=td.m_tilt!==undefined&&td.m_tilt!==''?td.m_tilt:'—';
+    const et=td.e_tilt!==undefined&&td.e_tilt!==''?td.e_tilt:'—';
+    const ant=td.antenna_type||'—';
+    const hasData=az!=='—'||mt!=='—'||et!=='—';
+    return {t,az,mt,et,ant,hasData};
+  });
+
+  return `<div style="border:1.5px solid ${col}20;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+    <div style="background:${col};padding:10px 14px;display:flex;align-items:center;justify-content:space-between">
+      <div style="font-weight:800;font-size:14px;color:#fff;letter-spacing:-.2px">Sector ${escH(lbl)}</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.9);font-weight:600;background:rgba(0,0,0,.18);padding:2px 8px;border-radius:20px">Ant: ${antH!=null?antH+' m':'—'}</div>
+    </div>
+    ${photoUrl?`<div style="width:100%;height:90px;overflow:hidden;cursor:pointer" onclick="openPhotoZoom('${escH(photoUrl)}',[${secs.filter(s=>s.photo_url).map(s=>"'"+escH(s.photo_url)+"'").join(',')}])">
+      <img src="${escH(photoUrl)}" style="width:100%;height:100%;object-fit:cover"/>
+    </div>`:`<div style="height:32px;background:${bg};display:flex;align-items:center;justify-content:center;font-size:14px">📡</div>`}
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="background:${bg};border-bottom:1.5px solid ${col}30">
+          <th style="padding:5px 10px;text-align:left;font-size:9px;font-weight:800;color:${col};text-transform:uppercase;letter-spacing:.5px">Tech</th>
+          <th style="padding:5px 6px;text-align:center;font-size:9px;font-weight:700;color:var(--muted)">Az °</th>
+          <th style="padding:5px 6px;text-align:center;font-size:9px;font-weight:700;color:var(--muted)">M °</th>
+          <th style="padding:5px 6px;text-align:center;font-size:9px;font-weight:700;color:var(--muted)">E °</th>
+          <th style="padding:5px 10px;text-align:left;font-size:9px;font-weight:700;color:var(--muted)">Antenna Type</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${techRows.map(({t,az,mt,et,ant,hasData})=>`
+        <tr class="aud-tech-row-${t.toLowerCase()}" style="border-top:1px solid #F1F5F9">
+          <td style="padding:6px 10px;font-weight:800;color:${col};font-size:11px">${t}</td>
+          <td style="padding:6px;text-align:center;font-weight:700;font-size:12px;color:${hasData?'#0F172A':'#CBD5E1'}">${az}</td>
+          <td style="padding:6px;text-align:center;font-weight:700;font-size:12px;color:${hasData?'#0F172A':'#CBD5E1'}">${mt}</td>
+          <td style="padding:6px;text-align:center;font-weight:700;font-size:12px;color:${hasData?'#0F172A':'#CBD5E1'}">${et!=null?et:'—'}</td>
+          <td style="padding:6px 10px;font-size:10.5px;color:var(--accent);font-weight:600;white-space:normal">${ant!=='—'?escH(ant):'–'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}).join('')}
+</div>`;
 })()}
 ${isApr?`<hr class="sep"/><div class="form-group"><label>Approver Remarks (optional)</label><textarea id="apr-rem" placeholder="Visible to auditor…"></textarea></div>`:''}
 
@@ -3389,6 +3611,14 @@ ${isApr?`<hr class="sep"/><div class="form-group"><label>Approver Remarks (optio
   <div id="aud-sat-map" style="position:absolute;inset:0;width:100%;height:100%"></div>
   <div id="aud-3d-mount" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1000"></div>
 </div>
+<!-- Tech filter — lives here, near 3D map -->
+<div id="aud-tech-bar" style="display:flex;align-items:center;gap:8px;padding:10px 2px;flex-wrap:wrap">
+  <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Show:</span>
+  ${siteShowTechs.map(t=>`<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-weight:700;font-size:12px;padding:5px 12px;border-radius:20px;border:1.5px solid ${t.toLowerCase()==='4g'?'var(--accent)':'var(--border)'};background:${t.toLowerCase()==='4g'?'var(--accent-bg)':'#fff'};color:${t.toLowerCase()==='4g'?'var(--accent)':'var(--muted)'};transition:all .15s" id="lbl-aud-${t.toLowerCase()}">
+    <input type="checkbox" id="aud-ck-${t.toLowerCase()}" ${t.toLowerCase()==='4g'?'checked':''} style="width:13px;height:13px;cursor:pointer;accent-color:var(--accent)" onchange="audFilterTechInModal(this,'${t.toLowerCase()}',window._currentSecs||[])">
+    ${t}
+  </label>`).join('')}
+</div>
 </div>
 <div class="modal-ftr">
 ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Edit & Approve</button>
@@ -3396,20 +3626,69 @@ ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Ed
 <button class="btn btn-success" onclick="doApprove('${a.id}')">✓ Approve</button>`
 :`<button class="btn btn-outline" onclick="closeModal()">Close</button>`}
 </div></div></div>`;
+    // Store current audit context for tech filter redraws
+    window._currentAudit = a;
+    window._currentSecs = secs;
+
+    // Load version history for this audit
+    DB.get('/rest/v1/site_audits?site_id=eq.'+encodeURIComponent(a.site_id)+'&order=submitted_at.desc&limit=20').then(function(versions){
+      const bar=document.getElementById('audit-versions-bar');
+      if(!bar||!versions||!versions.length) return;
+      bar.innerHTML='<span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;flex-shrink:0">Versions:</span>'
+        +versions.map(function(v){
+          const isCur=v.id===a.id;
+          const d=v.submitted_at?new Date(v.submitted_at):null;
+          const lbl=d?d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}):'?';
+          const allSrc=AUDIT_DASH_DATA||APPR_HISTORY||MY_AUDITS||[];
+          return '<button onclick="(function(){var t='+JSON.stringify(JSON.stringify(versions)).slice(1,-1)+';})()" style="padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid '+(isCur?'var(--accent)':'var(--border)')+';background:'+(isCur?'var(--accent)':'#fff')+';color:'+(isCur?'#fff':'var(--text2)')+'">'+(isCur?'⭐ Latest · ':'')+lbl+'</button>';
+        }).join('');
+      // Rebuild with proper version switch
+      bar.innerHTML='<span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;flex-shrink:0">Versions:</span>';
+      window._auditVersions=versions;
+      versions.forEach(function(v,vi){
+        const isCur=v.id===a.id;
+        const d=v.submitted_at?new Date(v.submitted_at):null;
+        const lbl=d?d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}):'?';
+        const btn=document.createElement('button');
+        btn.style.cssText='padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid '+(isCur?'var(--accent)':'var(--border)')+';background:'+(isCur?'var(--accent)':'#fff')+';color:'+(isCur?'#fff':'var(--text2)');
+        btn.textContent=(isCur?'⭐ Latest · ':'')+lbl;
+        btn.onclick=function(){
+          MODAL={type:'audit_detail',audit:v,idx:vi,isApprover:m.isApprover||false};
+          renderModal();
+        };
+        bar.appendChild(btn);
+      });
+    }).catch(function(){});
+
+    // Sector card rows always show ALL techs — checkboxes only affect 3D diagram
+    // Style 4G checkbox label as active by default (3D diagram starts with 4G)
+    setTimeout(()=>{
+      const lbl4=document.getElementById('lbl-aud-4g');
+      if(lbl4){ lbl4.style.background='var(--accent-bg)'; lbl4.style.borderColor='var(--accent)'; lbl4.style.color='var(--accent)'; }
+    }, 50);
+
     // Init 3D visualization — fetch lat/lng from SSL table in Cell_db project
     setTimeout(async ()=>{
       window._audSslCache = window._audSslCache || {};
       window._audVisTech = new Set(['4g']);
       const siteId = (a.site_id||'').trim();
-      // Try cache first
+      // Try SSL_CACHE first (already loaded from main project)
+      const _sslLocal = SSL_CACHE.find(s => s.siteId === siteId || s.siteId === String(parseInt(siteId,10)));
+      if(_sslLocal && (_sslLocal.lat || _sslLocal.lng)) {
+        window._audSslCache[siteId] = {
+          Latitude: _sslLocal.lat, Longitude: _sslLocal.lng,
+          Region: _sslLocal.region || ''
+        };
+        console.log('[AudViz] SSL_CACHE hit for', siteId, window._audSslCache[siteId]);
+      }
       if(!window._audSslCache[siteId] || !window._audSslCache[siteId].Latitude){
         try {
           // Site column is int8 — cast to integer for the query
           const _siteInt = parseInt(siteId, 10);
           const _r = await fetch(
-            'https://dvcndhtjoionkjngebgk.supabase.co/rest/v1/SSL?Site=eq.' + _siteInt + '&select=*&limit=1',
-            { headers:{ apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2Y25kaHRqb2lvbmtqbmdlYmdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MjA2MTYsImV4cCI6MjA4ODk5NjYxNn0.zYWT7_NEHxsi8p5oHRTUOfR5DO_MnvnAPsrN3ZW8xIU',
-              Authorization: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2Y25kaHRqb2lvbmtqbmdlYmdrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM0MjA2MTYsImV4cCI6MjA4ODk5NjYxNn0.zYWT7_NEHxsi8p5oHRTUOfR5DO_MnvnAPsrN3ZW8xIU' } }
+            SB_URL + '/rest/v1/SSL?Site=eq.' + _siteInt + '&select=Site,Latitude,Longitude,Region&limit=1',
+            { headers:{ apikey: SB_ANON,
+              Authorization: 'Bearer '+(DB._tok||SB_ANON) } }
           );
           if(_r.ok){
             const _rows = await _r.json();
@@ -3419,7 +3698,7 @@ ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Ed
               // Try all common column name variants
               const _lat = parseFloat(_row.Latitude ?? _row.latitude ?? _row.lat ?? _row.LAT ?? 0);
               const _lng = parseFloat(_row.Longitude ?? _row.longitude ?? _row.lng ?? _row.lon ?? _row.LNG ?? 0);
-              window._audSslCache[siteId] = { Latitude: _lat, Longitude: _lng };
+              window._audSslCache[siteId] = { Latitude: _lat, Longitude: _lng, Region: _row.Region||_row.region||'' };
               console.log('[AudViz] resolved lat/lng for', siteId, ':', _lat, _lng);
             }
           } else {
@@ -3438,6 +3717,11 @@ ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Ed
       const _lat = _coords.Latitude  || 0;
       const _lng = _coords.Longitude || 0;
       console.log('[AudViz] calling audDraw3D with', siteId, _lat, _lng);
+      // Guard: only draw if the modal DOM is still present (user may have closed modal during async fetch)
+      if(!document.getElementById('aud-sat-map')) {
+        console.warn('[AudViz] modal closed before 3D draw, aborting');
+        return;
+      }
       audDraw3D(a, secs, _lat, _lng);
     }, 200);
     return;
@@ -3450,7 +3734,7 @@ ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Ed
     const agentOpts=_editPool.map(ag=>`<option value="${ag.uid}" ${a.assigned_to===ag.uid?'selected':''}>${escH(ag.name||ag.email)}</option>`).join('');
     const pocOpts=CMPAK_USERS.map(u=>`<option value="${u.uid}" ${a.poc_uid===u.uid?'selected':''}>${escH(u.name||u.email)}</option>`).join('');
     const typeOpts=ACT_TYPES.map(t=>`<option value="${t.id}" ${a.type===t.id?'selected':''}>${t.icon} ${t.label}</option>`).join('');
-    const statOpts=['open','assigned','completed','cancelled','onhold','reassigned'].map(s=>`<option value="${s}" ${a.status===s?'selected':''}>${s}</option>`).join('');
+    const statOpts=['open','assigned','standby','completed','cancelled','onhold','reassigned'].map(s=>`<option value="${s}" ${a.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('');
     const regionOpts=(typeof REGIONS!=='undefined'?REGIONS:[]).map(r=>`<option value="${r}" ${a.region===r?'selected':''}>${r}</option>`).join('');
     mc.innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:560px">
 <div class="modal-hdr"><h3>✏ Edit Activity</h3><button class="btn-x" onclick="closeModal()">✕</button></div>
@@ -3503,7 +3787,7 @@ ${a.parent_activity_id?`<div style="font-size:12px;color:var(--muted);padding:8p
 </div>
 ${a.site_id||a.region?`<div class="detail-row" style="margin-top:10px">
 ${a.site_id?`<div class="detail-field"><div class="dk">Site ID</div><div class="dv" style="font-family:var(--mono)">${escH(a.site_id)}</div></div>`:''}
-${a.region?`<div class="detail-field"><div class="dk">Region</div><div class="dv">${escH(a.region)}</div></div>`:''}
+${a.region?`<div class="detail-field"><div class="dk">Region</div><div class="dv">${escH(a.region||(SSL_CACHE.find(s=>s.siteId===(a.site_id||'').trim())?.region)||'—')}</div></div>`:''}
 </div>`:''}
 ${a.description?`<div style="margin-top:10px"><div class="dk">Description</div><div style="font-size:13px;margin-top:4px;line-height:1.5">${escH(a.description)}</div></div>`:''}
 ${a.cancellation_reason?`<div style="margin-top:8px;padding:8px 10px;background:#FEF2F2;border-radius:7px;border:1px solid #FECACA"><div style="font-size:11px;font-weight:700;color:#DC2626;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Cancellation / Hold Reason</div><div style="font-size:13px;color:#DC2626">${escH(a.cancellation_reason)}</div></div>`:''}
@@ -3610,6 +3894,7 @@ ${AUTH.isCoordinator&&a.status==='completed'?`<button class="btn btn-warn" oncli
 // ════════════════════════════════════════════════════════════════
 // ACTION HANDLERS
 // ════════════════════════════════════════════════════════════════
+
 function openAuditDetail(idx){MODAL={type:'audit_detail',audit:MY_AUDITS[idx],idx,isApprover:false};renderModal();}
 function openApprHistDetail(idx){MODAL={type:'audit_detail',audit:APPR_HISTORY[idx],idx,isApprover:false};renderModal();}
 function openPendDetail(idx){MODAL={type:'audit_detail',audit:PEND_AUDITS[idx],idx,isApprover:true};renderModal();}
@@ -4162,10 +4447,10 @@ document.addEventListener('DOMContentLoaded', async function(){
     a.isCoordinator = (a.role||'').toLowerCase() === 'coordinator';
 
     // Always try to refresh the token silently on page load
+    // This guarantees a fresh token even after browser restart / overnight
     if (a.refreshToken) {
       const refreshed = await tryRefreshToken(a.refreshToken);
       if (refreshed) {
-        // Got a fresh access token — update stored session
         a.token        = refreshed.access_token;
         a.refreshToken = refreshed.refresh_token;
         try { localStorage.setItem('onroute_auth', JSON.stringify(a)); } catch(e){}
@@ -4174,12 +4459,30 @@ document.addEventListener('DOMContentLoaded', async function(){
         showApp();
         return;
       }
-      // Refresh failed (revoked / user deleted) — fall through to check existing token
+      // Refresh failed — token may still be valid (network blip), fall through
     }
 
-    // No refresh token or refresh failed — try existing access token
+    // No refresh token or refresh failed — validate existing access token
+    // before showing the app, so we don't show a blank authenticated screen
     if (!a.token) return;
     DB._tok = a.token;
+
+    // Quick token validation: ping a lightweight endpoint
+    try {
+      const _check = await fetch(SB_URL + '/auth/v1/user', {
+        headers: { 'apikey': SB_ANON, 'Authorization': 'Bearer ' + a.token }
+      });
+      if (!_check.ok) {
+        // Token is dead and we couldn't refresh — force re-login cleanly
+        console.warn('[auth] Stored token invalid, clearing session');
+        try { localStorage.removeItem('onroute_auth'); } catch(e){}
+        return; // stay on login screen
+      }
+    } catch(e) {
+      // Network offline — proceed optimistically; data loads will retry
+      console.warn('[auth] Token check skipped (offline), proceeding optimistically');
+    }
+
     AUTH = a;
     showApp();
   } catch(e) { console.log('Session restore failed:', e); }
@@ -4187,20 +4490,25 @@ document.addEventListener('DOMContentLoaded', async function(){
 
 // Auto-refresh token every 50 minutes while the page is open
 // (Supabase access tokens expire after 1 hour by default)
-setInterval(async function(){
-  if (!AUTH || !AUTH.refreshToken) return;
-  const refreshed = await tryRefreshToken(AUTH.refreshToken);
-  if (refreshed) {
-    AUTH.token        = refreshed.access_token;
-    AUTH.refreshToken = refreshed.refresh_token;
-    DB._tok           = AUTH.token;
-    try { localStorage.setItem('onroute_auth', JSON.stringify(AUTH)); } catch(e){}
-    console.log('[auth] Token silently refreshed');
+async function _doTokenRefresh(){
+  if(!AUTH||!AUTH.refreshToken) return;
+  const refreshed=await tryRefreshToken(AUTH.refreshToken);
+  if(refreshed){
+    AUTH.token=refreshed.access_token;AUTH.refreshToken=refreshed.refresh_token;DB._tok=AUTH.token;
+    try{localStorage.setItem('onroute_auth',JSON.stringify(AUTH));}catch(e){}
+    console.log('[auth] Token refreshed',new Date().toLocaleTimeString());
   } else {
-    console.warn('[auth] Silent refresh failed — user may need to re-login');
+    setTimeout(async()=>{
+      if(!AUTH||!AUTH.refreshToken)return;
+      const r2=await tryRefreshToken(AUTH.refreshToken);
+      if(r2){AUTH.token=r2.access_token;AUTH.refreshToken=r2.refresh_token;DB._tok=r2.access_token;
+        try{localStorage.setItem('onroute_auth',JSON.stringify(AUTH));}catch(e){}}
+    },5000);
   }
-}, 50 * 60 * 1000); // every 50 minutes
-
+}
+setInterval(_doTokenRefresh,10*60*1000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&AUTH)_doTokenRefresh();});
+window.addEventListener('online',()=>{_doTokenRefresh();setTimeout(()=>{if(MODULE==='activity')loadActivities();},1000);});
 // ════════════════════════════════════════════════════════════════
 // ANALYTICS DASHBOARD
 // ════════════════════════════════════════════════════════════════
@@ -5403,10 +5711,12 @@ let _audVisTech=new Set(['4g']);
 let _audSslCache={};
 
 function aud3dDispose(){
+  // Invalidate any in-flight render stamp so stale drawTower calls stop
+  window._aud3dRenderStamp = -1;
   if(_audAnimId){cancelAnimationFrame(_audAnimId);_audAnimId=null;}
   if(_audSatMap){try{_audSatMap.remove();}catch(e){} _audSatMap=null;}
   const sm=document.getElementById('aud-sat-map');
-  if(sm) sm.innerHTML='';
+  if(sm){ sm.innerHTML=''; delete sm._leaflet_id; }
   const mm=document.getElementById('aud-3d-mount');
   if(mm) mm.innerHTML='';
 }
@@ -5417,9 +5727,30 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
   siteLng = siteLng || 74.3;
 
   const satDiv=document.getElementById('aud-sat-map');
-  if(!satDiv||typeof L==='undefined') return;
+  if(!satDiv||typeof L==='undefined') {
+    console.warn('[AudDraw] #aud-sat-map missing or Leaflet not loaded — 3D draw aborted');
+    return;
+  }
+  // Stamp this render invocation; if modal closes/re-opens the stamp changes and stale draws stop
+  const _renderStamp = Date.now();
+  window._aud3dRenderStamp = _renderStamp;
+  // If Leaflet already attached to this container (Leaflet sets _leaflet_id), clear it first
+  if(satDiv._leaflet_id) {
+    try{ L.DomUtil.remove(satDiv); }catch(e){}
+    // Recreate the div to get a clean container
+    const parent = satDiv.parentNode;
+    if(parent){
+      const fresh = document.createElement('div');
+      fresh.id='aud-sat-map';
+      fresh.style.cssText='position:absolute;inset:0;width:100%;height:100%';
+      parent.replaceChild(fresh, satDiv);
+    }
+  }
+  // Re-query after possible replacement
+  const _satDiv2=document.getElementById('aud-sat-map');
+  if(!_satDiv2) return;
 
-  _audSatMap=L.map('aud-sat-map',{
+  _audSatMap=L.map(_satDiv2,{
     zoomControl:true, attributionControl:false,
     center:[siteLat,siteLng], zoom:18
   });
@@ -5450,11 +5781,12 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
   const _ro=new ResizeObserver(()=>{ resizeCanvas(); drawTower(); });
   _ro.observe(document.getElementById('aud-3d-wrap')||mount);
 
-  // Cell_db beam data: sectorIdx(0-based) → [{bw}]
-  let _cellDbBeams = {};
+  // Cell_db beam data — cached on window by siteId so tech switches don't re-fetch
+  const _cacheKey = 'celldb_' + (audit.site_id||'');
+  let _cellDbBeams = window[_cacheKey] || {};
 
-  // Fetch L-1800 from Cell_db for beam splitting (async, redraws when done)
-  (async()=>{
+  // Fetch ALL LTE cells for this site from Cell_db — count per sector for beam splitting
+  if(!window[_cacheKey])(async()=>{
     try{
       const _siteInt=parseInt((audit.site_id||'').trim(),10);
       const _cr=await fetch(
@@ -5464,29 +5796,62 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
       );
       if(_cr.ok){
         const _rows=await _cr.json();
-        const l1800=_rows.filter(row=>{
-          const band=(row['Frequency Band']||row['Cell Band']||row['band']||'').toUpperCase();
-          return band.includes('L-1800')||band.includes('LTE1800')||band.includes('1800')||band.includes('FDD1800');
+        console.log('[AudDraw] Cell_db total rows for site',_siteInt,':',_rows.length);
+        if(_rows.length) console.log('[AudDraw] Sample row keys:',Object.keys(_rows[0]).join(', '));
+
+        // Filter to LTE (4G) cells only — match any LTE/FDD/TDD band or technology field
+        // Cast wide net: L-, LTE, FDD, TDD in band field OR Technology field contains LTE/4G
+        const lteCells=_rows.filter(row=>{
+          const band=(row['Frequency Band']||row['Cell Band']||row['band']||row['Band']||'').toUpperCase();
+          const tech=(row['Technology']||row['technology']||row['Tech']||row['tech']||'').toUpperCase();
+          const isLteBand = band.includes('L-')||band.includes('LTE')||band.includes('FDD')||band.includes('TDD')||band.startsWith('B');
+          const isLteTech = tech.includes('LTE')||tech.includes('4G');
+          return isLteBand||isLteTech;
         });
-        // Map to sector index by Site_id_Sec suffix (1=A,2=B,3=C,4=D)
-        l1800.forEach(row=>{
-          // Site id_Sec format: "45025_1", "45025_2" — last token is sector number
-          const siteIdSec = row['Site id_Sec']||row['Site_id_Sec']||'';
-          const parts = siteIdSec.split('_');
-          const sec = parseInt(parts[parts.length-1])||0;
-          console.log('[AudDraw] Site_id_Sec:',siteIdSec,'→ sec:',sec);
-          if(!sec) return;
-          if(!_cellDbBeams[sec-1]) _cellDbBeams[sec-1]=[];
-          _cellDbBeams[sec-1].push(1); // just count L-1800 cells per sector
+        console.log('[AudDraw] LTE cells found:',lteCells.length);
+
+        // Map each LTE cell to its sector index (0-based: A=0,B=1,C=2,D=3)
+        // Site_id_Sec format variants: "45025_1", "45025_2", "45025A", "45025_A", "45025_1A"
+        // Strategy: extract the last numeric token — that is the 1-based sector number
+        lteCells.forEach(row=>{
+          const siteIdSec = (row['Site id_Sec']||row['Site_id_Sec']||row['Cell Name']||row['cell_name']||'').trim();
+          // Extract trailing digits: "45025_1" → "1", "45025_2B" → "2", "45025A_1" → "1"
+          // Also handle letter-only suffix: "45025_A" → sector 1, "45025_B" → sector 2
+          let secIdx = -1;
+          const numMatch = siteIdSec.match(/[_-]?(\d+)[A-Za-z]?$/);
+          const letMatch = siteIdSec.match(/[_-]?([A-Da-d])$/);
+          if(numMatch){
+            const n = parseInt(numMatch[1]);
+            // Could be 1-based (1=A) or could be a raw number
+            secIdx = n >= 1 ? n - 1 : -1;
+          } else if(letMatch){
+            secIdx = letMatch[1].toUpperCase().charCodeAt(0) - 65; // A=0,B=1,C=2,D=3
+          }
+          console.log('[AudDraw] Site_id_Sec:',siteIdSec,'→ secIdx:',secIdx);
+          if(secIdx < 0 || secIdx > 3) return;
+          if(!_cellDbBeams[secIdx]) _cellDbBeams[secIdx]=[];
+          _cellDbBeams[secIdx].push(1);
         });
-        console.log('[AudDraw] L-1800 counts per sector (0-based):', JSON.stringify(_cellDbBeams));
-        console.log('[AudDraw] L-1800 beams:',JSON.stringify(_cellDbBeams));
+
+        // Fallback: if sector parsing yielded nothing but we have LTE cells,
+        // distribute them evenly — better than no splitting at all
+        const totalMapped = Object.values(_cellDbBeams).reduce((s,a)=>s+a.length,0);
+        if(totalMapped===0 && lteCells.length>0){
+          console.warn('[AudDraw] Sector parsing failed — distributing cells evenly across sectors');
+          const perSec = Math.ceil(lteCells.length / sectors.length);
+          sectors.forEach((_,si)=>{ _cellDbBeams[si]=Array(perSec).fill(1); });
+        }
+
+        window[_cacheKey] = _cellDbBeams;
+        console.log('[AudDraw] LTE beam counts cached for site',audit.site_id,':',JSON.stringify(_cellDbBeams));
       }
-    }catch(e){console.warn('[AudDraw] Cell_db:',e);}
-    drawTower();
+    }catch(e){console.warn('[AudDraw] Cell_db fetch error:',e);}
+    _cellDbBeams = window[_cacheKey]||{}; drawTower();
   })();
 
   function drawTower(){
+    // Bail if a newer 3D render has been started (modal re-opened)
+    if(window._aud3dRenderStamp !== _renderStamp) return;
     if(!_audSatMap||!canvas) return;
     const ctx=canvas.getContext('2d');
     const W=canvas.width, H=canvas.height;
@@ -5500,20 +5865,36 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
     const azToCanvas=az=>az*Math.PI/180-Math.PI/2;
     const _lq=[];
 
+    // Determine active tech from checkboxes (4G default)
+    // Read active tech from checkboxes — default to 4G if not in DOM yet
+    const _ck4g=document.getElementById('aud-ck-4g');
+    const _ck3g=document.getElementById('aud-ck-3g');
+    const _ck2g=document.getElementById('aud-ck-2g');
+    const _ck5g=document.getElementById('aud-ck-5g');
+    // If no checkboxes exist yet, default 4G active
+    const _anyBox=_ck4g||_ck3g||_ck2g||_ck5g;
+    const _use4g=!_anyBox || (_ck4g&&_ck4g.checked);
+    const _use3g=!!(_anyBox && _ck3g&&_ck3g.checked && !(_ck4g&&_ck4g.checked));
+    const _use2g=!!(_anyBox && _ck2g&&_ck2g.checked && !(_ck4g&&_ck4g.checked) && !(_ck3g&&_ck3g.checked));
+    const _use5g=!!(_anyBox && _ck5g&&_ck5g.checked && !(_ck4g&&_ck4g.checked));
+
     sectors.forEach((s,i)=>{
       if(i>=4) return;
-      const ft=s.tech_4g||s.tech_3g||s.tech_2g||s.tech_5g||{};
+      // Pick tech data in priority order based on checkbox
+      const ft=(_use4g&&s.tech_4g)||(_use3g&&s.tech_3g)||(_use2g&&s.tech_2g)||(_use5g&&s.tech_5g)||s.tech_4g||s.tech_3g||s.tech_2g||{};
       const auditAz  = parseFloat(s.azimuth||s.antenna_azimuth||ft.azimuth||0);
       const auditBw  = parseFloat(s.beamwidth||ft.beamwidth||60);
-      const mt = ft.m_tilt!==''&&ft.m_tilt!=null ? parseFloat(ft.m_tilt) : (s.mechanical_tilt!==''&&s.mechanical_tilt!=null ? parseFloat(s.mechanical_tilt) : null);
-      const et = ft.e_tilt!==''&&ft.e_tilt!=null ? parseFloat(ft.e_tilt) : (s.electrical_tilt!==''&&s.electrical_tilt!=null ? parseFloat(s.electrical_tilt) : null);
+      // Parse tilt — handle numeric values and RET/DB strings (remote electrical tilt)
+      function parseTilt(v){ if(v===''||v==null||v===undefined) return null; const n=parseFloat(v); return isNaN(n)?String(v):n; }
+      const mt = parseTilt(ft.m_tilt) ?? parseTilt(s.mechanical_tilt);
+      const et = parseTilt(ft.e_tilt) ?? parseTilt(s.electrical_tilt);
       const antH = s.antenna_height!==''&&s.antenna_height!=null ? parseFloat(s.antenna_height) : null;
       const lbl=(s.sector||String.fromCharCode(65+i)).toUpperCase();
       const col=SCOLS[i%4];
       if(!(s.azimuth||s.antenna_azimuth||ft.azimuth)) return;
 
-      // Beam splitting: count L-1800 cells for this sector, split auditBw equally
-      const dbCount=(_cellDbBeams[i]||[]).length;
+      // Beam splitting: use Cell_db L-1800 for 4G, single beam for 3G/2G
+      const dbCount=_use4g?(_cellDbBeams[i]||[]).length:0;
       const n=dbCount>0?dbCount:1;
       const sliceW=auditBw/n;
       const leftEdge=auditAz-auditBw/2;
@@ -5578,7 +5959,7 @@ function audDraw3D(audit, sectors, siteLat, siteLng){
       const lx=cx+Math.cos(ba)*(R+16), ly=cy+Math.sin(ba)*(R+16);
       const l1=`${lbl}  ${az}°`;
       const mtStr=mt!=null?`M${mt}°`:'M—°';
-      const etStr=et!=null?`E${et}°`:'E—°';
+      const etStr=et!=null?(typeof et==='string'?`E${et}`:`E${et}°`):'E—°';
       const hStr=antH!=null?`H:${antH}m`:'H:—m';
       ctx.font='bold 10px system-ui';
       const lw=Math.max(ctx.measureText(l1).width,ctx.measureText(hStr+' '+mtStr+' '+etStr).width)+18;
@@ -5850,6 +6231,232 @@ function dismissToast(){
   if(card){ card.classList.remove('show'); card.classList.add('hide'); }
   setTimeout(()=>{ wrap.innerHTML=''; }, 300);
   if(_toastTimer){ clearTimeout(_toastTimer); _toastTimer=null; }
+}
+
+// ════════════════════════════════════════════════════════════
+// ALL AUDITS TAB
+// ════════════════════════════════════════════════════════════
+function renderAllAudits(){
+  return renderAuditDashboard(); // merged into dashboard
+}
+
+function renderAuditDashboard(){
+  if(AUDIT_DASH_LOAD) return `<div class="empty-state"><div class="ei">⏳</div><p>Loading…</p></div>`;
+  if(!AUDIT_DASH_DATA) return `<div class="empty-state"><div class="ei">📊</div><p><button class="btn btn-primary" onclick="loadAuditDashboardAndAll()">Load Audit Dashboard</button></p></div>`;
+
+  const data=AUDIT_DASH_DATA;
+  const total=data.length;
+  const approved=data.filter(a=>a.status==='approved').length;
+  const pending =data.filter(a=>a.status==='pending_approval').length;
+  const rejected=data.filter(a=>a.status==='rejected').length;
+  const rate=total?((approved/total)*100).toFixed(0):0;
+
+  function countBy(field){
+    const m={};
+    data.forEach(a=>{const v=a[field]||'Unknown';m[v]=(m[v]||0)+1;});
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  }
+  function cBar(entries,color,limit){
+    const max=entries[0]?.[1]||1;
+    const COLS=['#2563EB','#10B981','#7C3AED','#F59E0B','#EF4444','#0D9488','#EC4899','#6366F1'];
+    return entries.slice(0,limit||7).map(([label,count],i)=>{
+      const col=color||COLS[i%COLS.length];
+      const pct=Math.round((count/max)*100);
+      return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <div style="font-size:11px;color:var(--text2);font-weight:600;min-width:60px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escH(label)}">${escH(label)}</div>
+        <div style="flex:1;height:7px;background:var(--bg2);border-radius:4px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${col};border-radius:4px"></div>
+        </div>
+        <div style="font-size:11px;font-weight:700;color:${col};min-width:16px;text-align:right">${count}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // Region not stored in site_audits — join via SSL_CACHE by site_id
+  const _sslRegionMap={};
+  SSL_CACHE.forEach(s=>{ if(s.region) _sslRegionMap[s.siteId]=s.region; });
+  function countByRegion(){
+    const m={};
+    data.forEach(a=>{
+      const v=a.region||_sslRegionMap[String(a.site_id)]||_sslRegionMap[String(parseInt(a.site_id,10))]||'Unknown';
+      m[v]=(m[v]||0)+1;
+    });
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  }
+  const byRegion=countByRegion();
+  const byGrid=countBy('grid_id');
+  const byCompany=countBy('company');
+  const byAuditor=countBy('submitted_by_name');
+  const statusCls={pending_approval:'badge-pending',approved:'badge-approved',rejected:'badge-rejected'};
+  const statusLbl={pending_approval:'Pending',approved:'Approved',rejected:'Rejected'};
+
+  const q=(window._auditDashSearch||'').toLowerCase();
+  const sf=window._auditDashStatusF||'';
+  let filtered=q?data.filter(a=>
+    (a.site_id||'').toString().toLowerCase().includes(q)||
+    (a.grid_id||'').toLowerCase().includes(q)||
+    (a.submitted_by_name||'').toLowerCase().includes(q)||
+    (a.company||'').toLowerCase().includes(q)
+  ):data;
+  if(sf) filtered=filtered.filter(a=>a.status===sf);
+
+  return `<div>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+  <div>
+    <div class="page-title">Site Audits</div>
+    <div class="page-sub" style="margin-bottom:0">${total} audits loaded</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <input type="text" placeholder="🔍 Search by Site ID…" value="${escH(window._auditDashSearch||'')}"
+      oninput="window._auditDashSearch=this.value;renderPage()"
+      style="padding:6px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;width:190px"/>
+    <select onchange="window._auditDashStatusF=this.value;renderPage()" style="padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px">
+      <option value="">All Statuses</option>
+      <option value="pending_approval" ${sf==='pending_approval'?'selected':''}>Pending</option>
+      <option value="approved" ${sf==='approved'?'selected':''}>Approved</option>
+      <option value="rejected" ${sf==='rejected'?'selected':''}>Rejected</option>
+    </select>
+    <button class="btn btn-primary btn-sm" onclick="loadAuditDashboardAndAll()">🔄 Refresh</button>
+  </div>
+</div>
+
+<!-- Compact 4-column charts — fits half screen -->
+<div style="display:grid;grid-template-columns:160px 1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+
+  <!-- KPI column -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px 12px">
+    <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted2);margin-bottom:8px">Overview</div>
+    ${[['Total',total,'#374151'],['Approved',approved,'#16A34A'],['Pending',pending,'#D97706'],['Rejected',rejected,'#E11D48']].map(([lbl,val,col])=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <span style="font-size:11px;color:var(--muted)">${lbl}</span>
+      <span style="font-size:15px;font-weight:900;color:${col};line-height:1">${val}</span>
+    </div>`).join('')}
+    <div style="height:5px;border-radius:3px;overflow:hidden;background:var(--bg2);display:flex;margin-top:6px">
+      ${approved?`<div style="width:${((approved/total)*100).toFixed(0)}%;background:#16A34A"></div>`:''}
+      ${pending ?`<div style="width:${((pending /total)*100).toFixed(0)}%;background:#D97706"></div>`:''}
+      ${rejected?`<div style="width:${((rejected/total)*100).toFixed(0)}%;background:#E11D48"></div>`:''}
+    </div>
+    <div style="font-size:10px;color:var(--muted);margin-top:4px">${rate}% approval rate</div>
+  </div>
+
+  <!-- By Region (first after KPIs) -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+    <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted2);margin-bottom:8px">By Region</div>
+    ${cBar(byRegion,'#7C3AED')}
+  </div>
+
+  <!-- By Grid -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+    <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted2);margin-bottom:8px">By Grid</div>
+    ${cBar(byGrid,'#10B981')}
+  </div>
+
+  <!-- By Company -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+    <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted2);margin-bottom:8px">By Company</div>
+    ${cBar(byCompany)}
+  </div>
+
+  <!-- By Auditor -->
+  <div style="background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px">
+    <div style="font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:var(--muted2);margin-bottom:8px">By Auditor</div>
+    ${cBar(byAuditor)}
+  </div>
+
+</div>
+
+<!-- Audit list table -->
+<div style="background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+<table style="width:100%;border-collapse:collapse;font-size:13px">
+<thead><tr style="background:var(--surface2);border-bottom:2px solid var(--border)">
+  ${['SITE ID','REGION','GRID','SITE TYPE','AUDITOR','DATE','STATUS','ACTIONS'].map(h=>`<th style="padding:8px 14px;text-align:left;font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;white-space:nowrap">${h}</th>`).join('')}
+</tr></thead>
+<tbody>${(()=>{
+  if(!filtered.length) return `<tr><td colspan="8" style="text-align:center;padding:28px;color:var(--muted)">No audits match your filters.</td></tr>`;
+  window._auditDashFiltered=filtered;
+  return filtered.map((a,i)=>{
+    const st=a.status||'pending_approval';
+    const cls=statusCls[st]||'badge-cancelled';
+    const lbl=statusLbl[st]||st;
+    const isAppr=APPROVER_GRIDS.includes(a.grid_id);
+    return `<tr style="border-bottom:1px solid var(--border)" onmouseover="this.style.background='#F5F8FF'" onmouseout="this.style.background=''">
+      <td style="padding:9px 14px;font-family:var(--mono);font-weight:700">${escH(String(a.site_id||'—'))}</td>
+      <td style="padding:9px 14px;font-size:12px;color:var(--muted)">${escH(a.region||a.grid_id||'—')}</td>
+      <td style="padding:9px 14px"><span style="font-size:11px;font-weight:700;padding:2px 6px;border-radius:5px;background:var(--bg2);color:var(--text2)">${escH(a.grid_id||'—')}</span></td>
+      <td style="padding:9px 14px;font-size:12px">${escH(a.site_type||'—')}</td>
+      <td style="padding:9px 14px">
+        <div style="font-size:12px;font-weight:600">${escH(a.submitted_by_name||'—')}</div>
+        <div style="font-size:10px;color:var(--muted)">${escH(a.company||'')}</div>
+      </td>
+      <td style="padding:9px 14px;font-size:12px;color:var(--muted);white-space:nowrap">${fmtDate(a.submitted_at)}</td>
+      <td style="padding:9px 14px"><span class="badge ${cls}">${lbl}</span></td>
+      <td style="padding:9px 14px;white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="openAuditDashDetail(${i})" style="font-size:11px">View 3D</button>
+        ${isAppr&&st==='pending_approval'?`<button class="btn btn-success btn-sm" style="font-size:11px;margin-left:4px" onclick="openAuditDashReview(${i})">Review</button>`:''}
+      </td>
+    </tr>`;
+  }).join('');
+})()}</tbody>
+</table>
+</div>
+</div>`;
+}
+
+function openAuditDashDetail(i){
+  console.log('[View3D] clicked, index:', i, 'filtered len:', (window._auditDashFiltered||[]).length);
+  const a=(window._auditDashFiltered||AUDIT_DASH_DATA||[])[i];
+  if(!a){
+    console.warn('[View3D] No audit at index',i,'filtered:', window._auditDashFiltered, 'dash:', AUDIT_DASH_DATA);
+    // Fallback: if filtered is stale, try AUDIT_DASH_DATA directly
+    const fallback = (AUDIT_DASH_DATA||[])[i];
+    if(!fallback){ alert('Could not find audit record. Please refresh the dashboard.'); return; }
+    const auditFb={...fallback};
+    if(typeof auditFb.sectors==='string'){try{auditFb.sectors=JSON.parse(auditFb.sectors);}catch(e){auditFb.sectors=[];}}
+    MODAL={type:'audit_detail',audit:auditFb,idx:i,isApprover:false};
+    renderModal();
+    return;
+  }
+  // Use audit directly — ensure sectors is parsed from JSON string
+  const audit={...a};
+  if(typeof audit.sectors==='string'){
+    try{audit.sectors=JSON.parse(audit.sectors);}catch(e){audit.sectors=[];}
+  }
+  MODAL={type:'audit_detail',audit,idx:i,isApprover:false};
+  console.log('[View3D] calling renderModal, MODAL set to audit_detail for site:', audit.site_id);
+  renderModal();
+  console.log('[View3D] renderModal returned, modal-root innerHTML length:', document.getElementById('modal-root').innerHTML.length);
+}
+function openAuditDashReview(i){
+  const a=(window._auditDashFiltered||AUDIT_DASH_DATA||[])[i];
+  if(!a){return;}
+  const fromPend=PEND_AUDITS.find(x=>x.id===a.id);
+  if(fromPend){
+    const idx=PEND_AUDITS.indexOf(fromPend);
+    MODAL={type:'audit_detail',audit:fromPend,idx,isApprover:true};renderModal();
+  } else {
+    MODAL={type:'audit_detail',audit:a,idx:0,isApprover:true};renderModal();
+  }
+}
+function loadAuditDashboardAndAll(){
+  AUDIT_DASH_DATA=null; AUDIT_DASH_LOAD=false;
+  loadAuditDashboard();
+}
+
+
+// ════════════════════════════════════════════════════════════
+// AUDIT MODAL TECH FILTER
+// ════════════════════════════════════════════════════════════
+function audFilterTechInModal(cb, tech, sectors){
+  // Checkboxes ONLY control the 3D diagram — sector card rows always show all techs
+  // Style the checkbox label to reflect checked state
+  const lbl = document.getElementById('lbl-aud-' + tech);
+  if(lbl){
+    lbl.style.background = cb.checked ? 'var(--accent-bg)' : '#fff';
+    lbl.style.borderColor = cb.checked ? 'var(--accent)' : 'var(--border)';
+    lbl.style.color = cb.checked ? 'var(--accent)' : 'var(--muted)';
+  }
+  // Redraw 3D canvas with the selected tech
+  if(window._audDrawTower) window._audDrawTower();
 }
 
 </script>
