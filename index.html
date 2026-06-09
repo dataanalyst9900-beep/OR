@@ -1015,6 +1015,7 @@ let MODULE = 'audit'; // 'audit' | 'activity'
 let A_PAGE = 'new';
 let SSL_CACHE = [], SSL_LOADED = false;
 let SEL_SITE = null, IS_CUSTOM = false, SEARCH_Q = '', SEARCH_RES = [];
+let AUD_LAT = '', AUD_LNG = ''; // site coordinates — autofilled from SSL, user-editable
 let SITE_TYPE='Green Field', TOWER_TYPE='Tower', BLDG_H='', TOWER_H='', REMARKS='';
 let RESUB_ID=null, APPR_EDIT_ID=null;
 let TECH_DATA={}, SEC_H={};
@@ -1209,6 +1210,7 @@ function pickSiteByIdx(i) {
   if(!res || !res[i]) return;
   const s = res[i];
   SEL_SITE = s; IS_CUSTOM = false; SEARCH_Q = s.siteId;
+  AUD_LAT = s.lat ? String(s.lat) : ''; AUD_LNG = s.lng ? String(s.lng) : '';
   const inp = document.getElementById('site-search-inp');
   if(inp) inp.value = s.siteId;
   if(dd) dd.style.display = 'none';
@@ -1258,11 +1260,11 @@ async function submitAudit() {
   const now=new Date().toISOString(); const sectors=buildSectors();
   let ok=false;
   if(RESUB_ID){
-    ok=await DB.patch('site_audits',RESUB_ID,{site_type:SITE_TYPE,tower_type:SITE_TYPE==='IBS'?'':TOWER_TYPE,building_height:BLDG_H,tower_height:TOWER_H,sectors,remarks:REMARKS,status:'pending_approval',approved_at:null,approver_remarks:null});
+    ok=await DB.patch('site_audits',RESUB_ID,{site_type:SITE_TYPE,tower_type:SITE_TYPE==='IBS'?'':TOWER_TYPE,building_height:BLDG_H,tower_height:TOWER_H,sectors,remarks:REMARKS,status:'pending_approval',approved_at:null,approver_remarks:null,actual_latitude:AUD_LAT!==''?parseFloat(AUD_LAT):null,actual_longitude:AUD_LNG!==''?parseFloat(AUD_LNG):null});
   } else if(APPR_EDIT_ID){
-    ok=await DB.patch('site_audits',APPR_EDIT_ID,{site_type:SITE_TYPE,tower_type:SITE_TYPE==='IBS'?'':TOWER_TYPE,building_height:BLDG_H,tower_height:TOWER_H,sectors,remarks:REMARKS,status:'approved',approved_at:now});
+    ok=await DB.patch('site_audits',APPR_EDIT_ID,{site_type:SITE_TYPE,tower_type:SITE_TYPE==='IBS'?'':TOWER_TYPE,building_height:BLDG_H,tower_height:TOWER_H,sectors,remarks:REMARKS,status:'approved',approved_at:now,actual_latitude:AUD_LAT!==''?parseFloat(AUD_LAT):null,actual_longitude:AUD_LNG!==''?parseFloat(AUD_LNG):null});
   } else {
-    ok=await DB.post('site_audits',{id:crypto.randomUUID(),site_id:SEL_SITE.siteId,site_name:SEL_SITE.siteId,grid_id:SEL_SITE.gridId,site_type:SITE_TYPE,tower_type:SITE_TYPE==='IBS'?'':TOWER_TYPE,building_height:BLDG_H,tower_height:TOWER_H,sectors,remarks:REMARKS,submitted_by:AUTH.uid,submitted_by_name:AUTH.name,company:AUTH.company,submitted_at:now,status:'pending_approval'});
+    ok=await DB.post('site_audits',{id:crypto.randomUUID(),site_id:SEL_SITE.siteId,site_name:SEL_SITE.siteId,grid_id:SEL_SITE.gridId,site_type:SITE_TYPE,tower_type:SITE_TYPE==='IBS'?'':TOWER_TYPE,building_height:BLDG_H,tower_height:TOWER_H,sectors,remarks:REMARKS,submitted_by:AUTH.uid,submitted_by_name:AUTH.name,company:AUTH.company,submitted_at:now,status:'pending_approval',actual_latitude:AUD_LAT!==''?parseFloat(AUD_LAT):null,actual_longitude:AUD_LNG!==''?parseFloat(AUD_LNG):null});
   }
   SUBMITTING=false;
   SUBMIT_ST=ok?{type:'success',msg:RESUB_ID?'Resubmitted successfully.':APPR_EDIT_ID?'Saved and approved!':'Audit submitted — pending approval.'}:{type:'error',msg:'Submission failed. Please try again.'};
@@ -1331,7 +1333,7 @@ async function loadPending() {
   PEND_AUDITS=all; PEND_BADGE=all.length; APP_LOAD=false; if(MODULE==='audit'){renderPage();renderSidebar();}
 }
 function resetAuditForm() {
-  SEL_SITE=null;IS_CUSTOM=false;SEARCH_Q='';SEARCH_RES=[];
+  SEL_SITE=null;IS_CUSTOM=false;SEARCH_Q='';SEARCH_RES=[];AUD_LAT='';AUD_LNG='';
   SITE_TYPE='Green Field';TOWER_TYPE='Tower';BLDG_H='';TOWER_H='';REMARKS='';
   RESUB_ID=null;APPR_EDIT_ID=null;SUBMIT_ST=null;initTD();
 }
@@ -1519,9 +1521,14 @@ async function openReassignModal(actId){
   };
 }
 
-async function assignActivity(actId, agentUid, agentName) {
-  // Always patch the same entry — coordinator can reassign at any time
-  const ok=await DB.patch('activities',actId,{assigned_to:agentUid,assigned_to_name:agentName,status:'assigned',assigned_at:new Date().toISOString()});
+async function assignActivity(actId, agentUid, agentName, assignedDateStr) {
+  // Use user-supplied date/time, falling back to now
+  let assigned_at = new Date().toISOString();
+  if(assignedDateStr) {
+    const parsed = new Date(assignedDateStr);
+    if(!isNaN(parsed)) assigned_at = parsed.toISOString();
+  }
+  const ok=await DB.patch('activities',actId,{assigned_to:agentUid,assigned_to_name:agentName,status:'assigned',assigned_at});
   if(ok){closeModal();loadActivities();}else alert('Assignment failed.');
 }
 async function updateActStatus(actId, status) {
@@ -2646,6 +2653,16 @@ ${SUBMIT_ST?`<div class="alert alert-${SUBMIT_ST.type==='success'?'success':'err
 <div class="form-row">
 ${showB?`<div class="form-group"><label>${bLbl}</label><input type="number" value="${escH(BLDG_H)}" placeholder="e.g. 25" oninput="BLDG_H=this.value"/></div>`:'<div></div>'}
 <div class="form-group"><label>${tLbl}</label><input type="number" value="${escH(TOWER_H)}" placeholder="e.g. 36" oninput="TOWER_H=this.value"/></div>
+</div>
+<div class="form-row">
+<div class="form-group">
+  <label style="display:flex;align-items:center;gap:6px">Site Latitude <span style="font-size:10px;font-weight:600;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:10px">Auto-filled · Editable</span></label>
+  <input type="number" step="any" id="aud-lat-inp" value="${escH(AUD_LAT)}" placeholder="e.g. 31.52345" oninput="AUD_LAT=this.value" style="font-family:var(--mono)"/>
+</div>
+<div class="form-group">
+  <label style="display:flex;align-items:center;gap:6px">Site Longitude <span style="font-size:10px;font-weight:600;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:10px">Auto-filled · Editable</span></label>
+  <input type="number" step="any" id="aud-lng-inp" value="${escH(AUD_LNG)}" placeholder="e.g. 74.35612" oninput="AUD_LNG=this.value" style="font-family:var(--mono)"/>
+</div>
 </div></div></div>
 <div class="card" style="margin-bottom:18px">
 <div class="card-header"><span class="card-title">Sector Data</span><span style="font-size:12px;color:var(--muted)">A · B · C · D</span></div>
@@ -3455,15 +3472,25 @@ function _renderModalInner(mc, m){
     const _assignCo=((_assignAct.company||'LCC').toUpperCase());
     const _assignPool=_assignCo==='HUAWEI'?HW_AGENTS:_assignCo==='ZTE'?ZTE_AGENTS:AGENTS;
     const _assignLabel=_assignCo==='HUAWEI'?'Huawei':_assignCo==='ZTE'?'ZTE':'LCC';
-    mc.innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:420px">
+    const _defaultAssignDate = new Date().toISOString().slice(0,16); // "YYYY-MM-DDTHH:MM"
+    mc.innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:460px">
 <div class="modal-hdr"><h3>👤 Assign Activity</h3><button class="btn-x" onclick="closeModal()">✕</button></div>
 <div class="modal-body">
-<p style="font-size:13px;color:var(--muted);margin-bottom:16px">Select a <b>${_assignLabel}</b> person to assign this activity to:</p>
-${!_assignPool.length?`<p style="color:var(--muted);font-size:13px">No ${_assignLabel} agents found.</p>`:
-_assignPool.map(ag=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
-<div><b style="font-size:13px">${escH(ag.name||ag.email)}</b><div style="font-size:11px;color:var(--muted)">${escH(ag.email||'')}</div></div>
-<button class="btn btn-primary btn-sm" onclick="assignActivity('${m.actId}','${ag.uid}','${escH(ag.name||ag.email)}')">Assign</button>
-</div>`).join('')}
+<div class="form-group" style="margin-bottom:16px">
+  <label style="display:flex;align-items:center;gap:6px">Assigned Date &amp; Time
+    <span style="font-size:10px;font-weight:600;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:10px">Auto-filled · Editable</span>
+  </label>
+  <input type="datetime-local" id="assign-date-inp" value="${_defaultAssignDate}"
+    style="font-family:var(--mono);font-size:13px"/>
+</div>
+<div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:4px">
+  <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Select a <b>${_assignLabel}</b> person to assign to:</p>
+  ${!_assignPool.length?`<p style="color:var(--muted);font-size:13px">No ${_assignLabel} agents found.</p>`:
+  _assignPool.map(ag=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+  <div><b style="font-size:13px">${escH(ag.name||ag.email)}</b><div style="font-size:11px;color:var(--muted)">${escH(ag.email||'')}</div></div>
+  <button class="btn btn-primary btn-sm" onclick="assignActivity('${m.actId}','${ag.uid}','${escH(ag.name||ag.email)}',document.getElementById('assign-date-inp')?.value)">Assign</button>
+  </div>`).join('')}
+</div>
 </div>
 <div class="modal-ftr"><button class="btn btn-outline" onclick="closeModal()">Cancel</button></div>
 </div></div>`; return;
@@ -3514,6 +3541,32 @@ _assignPool.map(ag=>`<div style="display:flex;align-items:center;justify-content
   <div class="detail-field"><div class="dk">Status</div><div class="dv">${statusBadge(a.status)}</div></div>
   ${a.approved_at?`<div class="detail-field"><div class="dk">Approved On</div><div class="dv" style="color:var(--green)">${fmtDate(a.approved_at)}</div></div>`:'<div></div>'}
 </div>
+${(()=>{
+  const _aLat = a.actual_latitude != null ? parseFloat(a.actual_latitude) : null;
+  const _aLng = a.actual_longitude != null ? parseFloat(a.actual_longitude) : null;
+  const _sLat = sslSite?.lat ? parseFloat(sslSite.lat) : null;
+  const _sLng = sslSite?.lng ? parseFloat(sslSite.lng) : null;
+  if(_aLat==null && _aLng==null) return '';
+  // Haversine distance in metres
+  let distBadge = '';
+  if(_sLat && _sLng && _aLat && _aLng){
+    const R=6371000, dLat=(_aLat-_sLat)*Math.PI/180, dLng=(_aLng-_sLng)*Math.PI/180;
+    const aa=Math.sin(dLat/2)**2+Math.cos(_sLat*Math.PI/180)*Math.cos(_aLat*Math.PI/180)*Math.sin(dLng/2)**2;
+    const dist=Math.round(R*2*Math.atan2(Math.sqrt(aa),Math.sqrt(1-aa)));
+    const ok=dist<=50;
+    const warn=dist<=500;
+    const col=ok?'#059669':warn?'#D97706':'#DC2626';
+    const bg=ok?'#ECFDF5':warn?'#FFFBEB':'#FEF2F2';
+    const icon=ok?'✓ Matches SSL':warn?'⚠ '+dist+'m from SSL':'✕ '+dist+'m from SSL';
+    distBadge=`<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:${bg};color:${col};margin-left:8px;vertical-align:middle">${icon}</span>`;
+  } else if(!_sLat) {
+    distBadge=`<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;background:#F1F5F9;color:#94A3B8;margin-left:8px;vertical-align:middle">No SSL reference</span>`;
+  }
+  return `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:grid;grid-template-columns:1fr 1fr;gap:10px 16px">
+    <div class="detail-field"><div class="dk" style="display:flex;align-items:center">Actual Latitude${distBadge}</div><div class="dv" style="font-family:var(--mono)">${_aLat!=null?_aLat.toFixed(6):'—'}${_sLat?`<span style="font-size:10px;font-weight:500;color:var(--muted);margin-left:6px">SSL: ${_sLat.toFixed(6)}</span>`:''}</div></div>
+    <div class="detail-field"><div class="dk">Actual Longitude</div><div class="dv" style="font-family:var(--mono)">${_aLng!=null?_aLng.toFixed(6):'—'}${_sLng?`<span style="font-size:10px;font-weight:500;color:var(--muted);margin-left:6px">SSL: ${_sLng.toFixed(6)}</span>`:''}</div></div>
+  </div>`;
+})()}
 ${a.remarks?`<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)"><div class="dk">Auditor Remarks</div><div style="font-size:13px;margin-top:3px;color:var(--text2)">${escH(a.remarks)}</div></div>`:''}
 ${a.approver_remarks?`<div class="${a.status==='rejected'?'reject-box':'approve-box'}" style="margin-top:10px"><b>${a.status==='rejected'?'✕ Rejection Reason':'✓ Approver Remarks'}:</b> ${escH(a.approver_remarks)}</div>`:''}
 </div>
@@ -3667,39 +3720,46 @@ ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Ed
       if(lbl4){ lbl4.style.background='var(--accent-bg)'; lbl4.style.borderColor='var(--accent)'; lbl4.style.color='var(--accent)'; }
     }, 50);
 
-    // Init 3D visualization — fetch lat/lng from SSL table in Cell_db project
+    // Init 3D visualization — resolve lat/lng with priority:
+    // 1. actual_latitude/longitude saved on the audit record (most accurate)
+    // 2. SSL_CACHE (already loaded in memory)
+    // 3. Remote SSL table fetch (fallback for old records without actual coords)
     setTimeout(async ()=>{
       window._audSslCache = window._audSslCache || {};
       window._audVisTech = new Set(['4g']);
       const siteId = (a.site_id||'').trim();
-      // Try SSL_CACHE first (already loaded from main project)
-      const _sslLocal = SSL_CACHE.find(s => s.siteId === siteId || s.siteId === String(parseInt(siteId,10)));
-      if(_sslLocal && (_sslLocal.lat || _sslLocal.lng)) {
-        window._audSslCache[siteId] = {
-          Latitude: _sslLocal.lat, Longitude: _sslLocal.lng,
-          Region: _sslLocal.region || ''
-        };
-        console.log('[AudViz] SSL_CACHE hit for', siteId, window._audSslCache[siteId]);
+
+      // ── Priority 1: use actual coordinates stored on the audit record ──
+      if(a.actual_latitude && a.actual_longitude){
+        console.log('[AudViz] Using actual_latitude/longitude from audit record:', a.actual_latitude, a.actual_longitude);
+        window._audSslCache[siteId] = { Latitude: a.actual_latitude, Longitude: a.actual_longitude };
       }
+
+      // ── Priority 2: SSL_CACHE (in-memory, already loaded) ──
+      if(!window._audSslCache[siteId] || !window._audSslCache[siteId].Latitude){
+        const _sslLocal = SSL_CACHE.find(s => s.siteId === siteId || s.siteId === String(parseInt(siteId,10)));
+        if(_sslLocal && (_sslLocal.lat || _sslLocal.lng)) {
+          window._audSslCache[siteId] = { Latitude: _sslLocal.lat, Longitude: _sslLocal.lng, Region: _sslLocal.region||'' };
+          console.log('[AudViz] SSL_CACHE hit for', siteId, window._audSslCache[siteId]);
+        }
+      }
+
+      // ── Priority 3: remote SSL table fetch (old audits without actual coords) ──
       if(!window._audSslCache[siteId] || !window._audSslCache[siteId].Latitude){
         try {
-          // Site column is int8 — cast to integer for the query
           const _siteInt = parseInt(siteId, 10);
           const _r = await fetch(
             SB_URL + '/rest/v1/SSL?Site=eq.' + _siteInt + '&select=Site,Latitude,Longitude,Region&limit=1',
-            { headers:{ apikey: SB_ANON,
-              Authorization: 'Bearer '+(DB._tok||SB_ANON) } }
+            { headers:{ apikey: SB_ANON, Authorization: 'Bearer '+(DB._tok||SB_ANON) } }
           );
           if(_r.ok){
             const _rows = await _r.json();
-            console.log('[AudViz] SSL raw row for', siteId, ':', JSON.stringify(_rows[0]));
             if(_rows && _rows.length){
               const _row = _rows[0];
-              // Try all common column name variants
               const _lat = parseFloat(_row.Latitude ?? _row.latitude ?? _row.lat ?? _row.LAT ?? 0);
               const _lng = parseFloat(_row.Longitude ?? _row.longitude ?? _row.lng ?? _row.lon ?? _row.LNG ?? 0);
               window._audSslCache[siteId] = { Latitude: _lat, Longitude: _lng, Region: _row.Region||_row.region||'' };
-              console.log('[AudViz] resolved lat/lng for', siteId, ':', _lat, _lng);
+              console.log('[AudViz] remote SSL resolved lat/lng for', siteId, ':', _lat, _lng);
             }
           } else {
             const _err = await _r.json().catch(()=>({}));
@@ -3707,12 +3767,11 @@ ${isApr?`<button class="btn btn-outline" onclick="openApprEdit(${m.idx})">✏ Ed
           }
         } catch(e){ console.warn('[AudViz] SSL fetch failed', e); }
       }
-      // Fallback to local SSL_CACHE if remote fetch got nothing
+      // Final fallback — should rarely hit this
       if(!window._audSslCache[siteId] || !window._audSslCache[siteId].Latitude){
         const _local = SSL_CACHE.find(s => s.siteId === siteId);
         if(_local) window._audSslCache[siteId] = { Latitude: _local.lat, Longitude: _local.lng };
       }
-      // Pass lat/lng directly — avoids any variable scope / cache key issues
       const _coords = window._audSslCache[siteId] || {};
       const _lat = _coords.Latitude  || 0;
       const _lng = _coords.Longitude || 0;
@@ -3908,7 +3967,7 @@ function openResub(idx){
   SEL_SITE={siteId:a.site_id,gridId:a.grid_id||'',siteTech:''};IS_CUSTOM=true;SEARCH_Q=a.site_id;
   SITE_TYPE=a.site_type||'Green Field';TOWER_TYPE=a.tower_type||'Tower';
   BLDG_H=a.building_height||'';TOWER_H=a.tower_height||'';REMARKS=a.remarks||'';
-  restoreSectors(a.sectors);A_PAGE='new';render();window.scrollTo(0,0);
+  restoreSectors(a.sectors);AUD_LAT=a.actual_latitude!=null?String(a.actual_latitude):(SEL_SITE?.lat?String(SEL_SITE.lat):'');AUD_LNG=a.actual_longitude!=null?String(a.actual_longitude):(SEL_SITE?.lng?String(SEL_SITE.lng):'');A_PAGE='new';render();window.scrollTo(0,0);
 }
 function openApprEdit(idx){
   const a=PEND_AUDITS[idx];
@@ -3916,7 +3975,7 @@ function openApprEdit(idx){
   SEL_SITE={siteId:a.site_id,gridId:a.grid_id||'',siteTech:''};IS_CUSTOM=true;SEARCH_Q=a.site_id;
   SITE_TYPE=a.site_type||'Green Field';TOWER_TYPE=a.tower_type||'Tower';
   BLDG_H=a.building_height||'';TOWER_H=a.tower_height||'';REMARKS=a.remarks||'';
-  restoreSectors(a.sectors);MODAL=null;A_PAGE='new';render();window.scrollTo(0,0);
+  restoreSectors(a.sectors);AUD_LAT=a.actual_latitude!=null?String(a.actual_latitude):(SEL_SITE?.lat?String(SEL_SITE.lat):'');AUD_LNG=a.actual_longitude!=null?String(a.actual_longitude):(SEL_SITE?.lng?String(SEL_SITE.lng):'');MODAL=null;A_PAGE='new';render();window.scrollTo(0,0);
 }
 async function quickApprove(id){
   if(!confirm('Approve this audit?'))return;
