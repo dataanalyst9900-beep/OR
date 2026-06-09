@@ -704,7 +704,8 @@ tr.standby-row td{animation:standby-pulse 1.4s ease-in-out infinite;white-space:
       <div class="login-logo">
         <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
       </div>
-      <h1>Vendor Management</h1>
+      <h1>OnRoute</h1>
+      <p>Field Team Portal</p>
     </div>
     <div class="login-card">
         <div id="login-err" class="login-err">Invalid credentials.</div>
@@ -4498,6 +4499,56 @@ document.addEventListener('DOMContentLoaded', async function(){
   const stale=document.getElementById('onroute-loading-overlay');
   if(stale) stale.remove();
   try {
+    // ── SSO from sitequery.online ─────────────────────────────────────────
+    // sitequery.online appends session params when linking to this portal.
+    // We read them, validate with Supabase, store locally, then clean the URL.
+    const _urlParams = new URLSearchParams(window.location.search);
+    const _sqToken   = _urlParams.get('sq_token');
+    const _sqRefresh = _urlParams.get('sq_refresh');
+    const _sqUid     = _urlParams.get('sq_uid');
+    if (_sqToken && _sqUid) {
+      console.log('[SSO] Session params detected from sitequery.online');
+      // Validate the token with Supabase
+      try {
+        const _vr = await fetch(SB_URL + '/auth/v1/user', {
+          headers: { 'apikey': SB_ANON, 'Authorization': 'Bearer ' + _sqToken }
+        });
+        if (_vr.ok) {
+          const _ud = await _vr.json();
+          // Fetch role from users table same way as doLogin does
+          const _ur = await fetch(SB_URL + '/rest/v1/users?uid=eq.' + _ud.id + '&select=*&limit=1', {
+            headers: { 'apikey': SB_ANON, 'Authorization': 'Bearer ' + _sqToken }
+          });
+          const _urows = _ur.ok ? await _ur.json() : [];
+          const _urow  = _urows[0] || {};
+          const _ssoAuth = {
+            uid:          _ud.id,
+            email:        _ud.email,
+            name:         _urow.name  || _ud.email,
+            role:         _urow.role  || 'field',
+            company:      _urow.company || '',
+            token:        _sqToken,
+            refreshToken: _sqRefresh || '',
+            isCoordinator:(_urow.role||'').toLowerCase() === 'coordinator'
+          };
+          try { localStorage.setItem('onroute_auth', JSON.stringify(_ssoAuth)); } catch(e){}
+          // Clean the URL — remove SSO params so they don't linger in browser history
+          const _cleanUrl = window.location.pathname;
+          window.history.replaceState({}, '', _cleanUrl);
+          DB._tok = _sqToken;
+          AUTH    = _ssoAuth;
+          console.log('[SSO] Auto-signed in as', _ssoAuth.email);
+          showApp();
+          return;
+        } else {
+          console.warn('[SSO] Token from sitequery.online was invalid, showing login');
+          // Clean URL even on failure
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      } catch(e) { console.warn('[SSO] Validation error', e); }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     const saved = localStorage.getItem('onroute_auth');
     if (!saved) return;
     const a = JSON.parse(saved);
