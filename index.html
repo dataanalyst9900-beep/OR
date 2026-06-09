@@ -6479,10 +6479,10 @@ function renderAuditDashboard(){
     <div class="page-sub" style="margin-bottom:0">${total} audits loaded</div>
   </div>
   <div style="display:flex;align-items:center;gap:8px">
-    <input type="text" placeholder="🔍 Search by Site ID…" value="${escH(window._auditDashSearch||'')}"
-      oninput="window._auditDashSearch=this.value;renderPage()"
+    <input type="text" id="aud-dash-search-inp" placeholder="🔍 Search by Site ID…" value="${escH(window._auditDashSearch||'')}"
+      oninput="window._auditDashSearch=this.value;renderAuditDashTable()"
       style="padding:6px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;width:190px"/>
-    <select onchange="window._auditDashStatusF=this.value;renderPage()" style="padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px">
+    <select onchange="window._auditDashStatusF=this.value;window._auditDashStatus=this.value;renderAuditDashTable()" style="padding:6px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px">
       <option value="">All Statuses</option>
       <option value="pending_approval" ${sf==='pending_approval'?'selected':''}>Pending</option>
       <option value="approved" ${sf==='approved'?'selected':''}>Approved</option>
@@ -6543,7 +6543,7 @@ function renderAuditDashboard(){
 <thead><tr style="background:var(--surface2);border-bottom:2px solid var(--border)">
   ${['SITE ID','REGION','GRID','SITE TYPE','AUDITOR','DATE','STATUS','ACTIONS'].map(h=>`<th style="padding:8px 14px;text-align:left;font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;white-space:nowrap">${h}</th>`).join('')}
 </tr></thead>
-<tbody>${(()=>{
+<tbody id="aud-dash-tbody">${(()=>{
   if(!filtered.length) return `<tr><td colspan="8" style="text-align:center;padding:28px;color:var(--muted)">No audits match your filters.</td></tr>`;
   window._auditDashFiltered=filtered;
   return filtered.map((a,i)=>{
@@ -6572,6 +6572,48 @@ function renderAuditDashboard(){
 </table>
 </div>
 </div>`;
+}
+
+// Targeted tbody-only re-render — keeps search input focused
+function renderAuditDashTable(){
+  const tbody = document.getElementById('aud-dash-tbody');
+  if(!tbody){ renderPage(); return; } // fallback if full render needed
+  const q = (window._auditDashSearch||'').toLowerCase();
+  const st = window._auditDashStatus||'';
+  const data = AUDIT_DASH_DATA||[];
+  const filtered = data.filter(a=>{
+    if(st && a.status !== st) return false;
+    if(q && !String(a.site_id||'').toLowerCase().includes(q) &&
+           !(a.submitted_by_name||'').toLowerCase().includes(q) &&
+           !(a.grid_id||'').toLowerCase().includes(q)) return false;
+    return true;
+  });
+  window._auditDashFiltered = filtered;
+  const statusCls={approved:'badge-approved',pending_approval:'badge-pending',rejected:'badge-rejected'};
+  const statusLbl={approved:'✅ Approved',pending_approval:'⏳ Pending',rejected:'✕ Rejected'};
+  if(!filtered.length){
+    tbody.innerHTML=`<tr><td colspan="8" style="text-align:center;padding:28px;color:var(--muted)">No audits match your filters.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filtered.map((a,i)=>{
+    const st2=a.status||'pending_approval';
+    const cls=statusCls[st2]||'badge-cancelled';
+    const lbl=statusLbl[st2]||st2;
+    const isAppr=APPROVER_GRIDS.includes(a.grid_id);
+    return `<tr style="border-bottom:1px solid var(--border)" onmouseover="this.style.background='#F5F8FF'" onmouseout="this.style.background=''">
+      <td style="padding:9px 14px;font-family:var(--mono);font-weight:700">${escH(String(a.site_id||'—'))}</td>
+      <td style="padding:9px 14px;font-size:12px;color:var(--muted)">${escH(a.region||a.grid_id||'—')}</td>
+      <td style="padding:9px 14px"><span style="font-size:11px;font-weight:700;padding:2px 6px;border-radius:5px;background:var(--bg2);color:var(--text2)">${escH(a.grid_id||'—')}</span></td>
+      <td style="padding:9px 14px;font-size:12px">${escH(a.site_type||'—')}</td>
+      <td style="padding:9px 14px"><div style="font-size:12px;font-weight:600">${escH(a.submitted_by_name||'—')}</div><div style="font-size:10px;color:var(--muted)">${escH(a.company||'')}</div></td>
+      <td style="padding:9px 14px;font-size:12px;color:var(--muted);white-space:nowrap">${fmtDate(a.submitted_at)}</td>
+      <td style="padding:9px 14px"><span class="badge ${cls}">${lbl}</span></td>
+      <td style="padding:9px 14px;white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="openAuditDashDetail(${i})" style="font-size:11px">View 3D</button>
+        ${isAppr&&st2==='pending_approval'?`<button class="btn btn-success btn-sm" style="font-size:11px;margin-left:4px" onclick="openAuditDashReview(${i})">Review</button>`:''}
+      </td>
+    </tr>`;
+  }).join('');
 }
 
 function openAuditDashDetail(i){
