@@ -389,7 +389,28 @@ tr.standby-row td{animation:standby-pulse 1.4s ease-in-out infinite;white-space:
   font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;
   letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid var(--border);
   background:var(--surface2);text-align:left;white-space:nowrap;
+  user-select:none;
 }
+.data-table th.sortable{cursor:pointer;position:relative;padding-right:22px;}
+.data-table th.sortable:hover{background:var(--bg2);color:var(--accent);}
+.data-table th.sortable::after{
+  content:"⇅";position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  font-size:10px;opacity:.35;font-style:normal;
+}
+.data-table th.sort-asc::after{content:"↑";opacity:.85;color:var(--accent);}
+.data-table th.sort-desc::after{content:"↓";opacity:.85;color:var(--accent);}
+.data-table th.sort-asc,.data-table th.sort-desc{color:var(--accent);}
+/* Column filter row */
+.tbl-filter-row th{padding:3px 4px !important;background:var(--bg) !important;border-bottom:1px solid var(--border) !important;}
+.tbl-filter-inp{
+  width:100%;box-sizing:border-box;padding:3px 6px;font-size:11px;
+  border:1px solid var(--border);border-radius:5px;background:#fff;
+  color:var(--text);outline:none;font-family:inherit;
+}
+.tbl-filter-inp:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(99,102,241,.12);}
+.tbl-filter-inp::placeholder{color:var(--muted2);}
+/* Highlight filtered cells */
+.tbl-match-hl{background:#FEF9C3;border-radius:2px;}
 .data-table td{padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;vertical-align:middle;color:var(--text2);}
 .data-table tr:last-child td{border-bottom:none;}
 .data-table tbody tr{transition:background .1s;}
@@ -1067,9 +1088,23 @@ async function doLogin() {
     return;
   }
   
-  // Load profile
-  const rows = await DB.get('/rest/v1/users?uid=eq.'+data.user.id+'&select=name,company,email,role&limit=1');
+  // Load profile — include Onroute permission column
+  const rows = await DB.get('/rest/v1/users?uid=eq.'+data.user.id+'&select=name,company,email,role,Onroute&limit=1');
   const prof = rows[0] || {};
+
+  // ── Access gate: Onroute column must be "Approved" ──
+  if((prof.Onroute||'').trim().toLowerCase() !== 'approved'){
+    // Sign out from Supabase so the token isn't kept
+    await DB.auth.signOut();
+    errEl.innerHTML = `<b>Access Not Permitted</b><br>
+      Your account does not have permission to access the OnRoute portal.<br>
+      <span style="font-size:11px;color:var(--muted2)">Contact your administrator to request access.</span>`;
+    errEl.classList.add('on');
+    if(btn){ btn.disabled=false; btn.innerHTML='Sign In'; }
+    document.getElementById('li-pass').value='';
+    return;
+  }
+
   AUTH = {
     uid: data.user.id, email: data.user.email,
     name: prof.name||data.user.email, company: prof.company||'',
@@ -1116,14 +1151,24 @@ function showApp() {
 }
 
 function doSignOut() {
-  DB.auth.signOut(); AUTH=null; MODULE='activity'; A_PAGE='new'; AC_PAGE='dashboard';
-  try{ localStorage.removeItem('onroute_auth'); } catch(e){}
+  try { DB.auth.signOut(); } catch(e) {}
+  AUTH = null; MODULE = 'activity'; A_PAGE = 'new'; AC_PAGE = 'dashboard';
+  try { localStorage.removeItem('onroute_auth'); } catch(e) {}
   if(window._sessionTimer) clearInterval(window._sessionTimer);
-  if(window._approvalPoll) clearInterval(window._approvalPoll);
-  resetAuditForm();
-  document.getElementById('app-shell').style.display  = 'none';
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('li-pass').value='';
+  if(window._approvalPoll)  clearInterval(window._approvalPoll);
+  try { resetAuditForm(); } catch(e) {}
+  // Hide app, show login — guard every getElementById in case DOM isn't ready
+  const shell = document.getElementById('app-shell');
+  const login = document.getElementById('login-screen');
+  const pass  = document.getElementById('li-pass');
+  const email = document.getElementById('li-email');
+  if(shell) { shell.style.display = 'none'; shell.style.visibility = 'visible'; }
+  if(login) { login.style.display = 'flex'; login.style.visibility = 'visible'; login.style.zIndex = '9999'; }
+  if(pass)  pass.value  = '';
+  if(email) email.value = '';
+  // Reset any SSO-related state
+  try { window.history.replaceState({}, '', window.location.pathname); } catch(e) {}
+  console.log('[auth] Signed out');
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -3159,9 +3204,9 @@ ${!filtered.length?`<div class="empty-state"><div class="ei">📋</div><p>No act
 <td><span class="tag">${escH(a.priority||'—')}</span></td>
 <td>${statusBadge(a.status||'open')}</td>
 <td><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:${(a.target_company||a.company||'').toUpperCase()==='HUAWEI'?'#FEE2E2':(a.target_company||a.company||'').toUpperCase()==='ZTE'?'#D1FAE5':'#DBEAFE'};color:${(a.target_company||a.company||'').toUpperCase()==='HUAWEI'?'#991B1B':(a.target_company||a.company||'').toUpperCase()==='ZTE'?'#065F46':'#1E40AF'}">${escH(a.target_company||a.company||'—')}</span></td>
-<td style="font-size:12px;color:var(--muted)">${a.assigned_at?fmtDate(a.assigned_at):'—'}</td><td>${logStatus}</td>
-<td>${repStatus}</td>
+<td>${logStatus}</td><td>${repStatus}</td>
 <td style="font-size:12px;color:var(--muted)">${fmtDate(a.created_at)}</td>
+<td style="font-size:12px;color:var(--muted)">${a.assigned_at?fmtDate(a.assigned_at):'—'}</td>
 <td style="display:flex;gap:4px;flex-wrap:wrap">
 <button class="btn btn-outline btn-sm" onclick="openActDetail(${idx},'all')">View</button>
 ${AUTH&&AUTH.isCoordinator?`<button class="btn btn-outline btn-sm" style="margin-left:4px" onclick="openEditActivityModal('${a.id}')">✏ Edit</button>`:''}
@@ -4521,6 +4566,20 @@ document.addEventListener('DOMContentLoaded', async function(){
           });
           const _urows = _ur.ok ? await _ur.json() : [];
           const _urow  = _urows[0] || {};
+          // ── SSO access gate: Onroute must be "Approved" ──
+          if((_urow.Onroute||'').trim().toLowerCase() !== 'approved'){
+            console.warn('[SSO] User not approved for OnRoute:', _ud.email);
+            window.history.replaceState({}, '', window.location.pathname);
+            // Show permission error on the login screen
+            const _errEl = document.getElementById('login-err');
+            if(_errEl){
+              _errEl.innerHTML = `<b>Access Not Permitted</b><br>
+                Your account does not have permission to access the OnRoute portal.<br>
+                <span style="font-size:11px;color:var(--muted2)">Contact your administrator to request access.</span>`;
+              _errEl.classList.add('on');
+            }
+            return;
+          }
           const _ssoAuth = {
             uid:          _ud.id,
             email:        _ud.email,
@@ -4592,6 +4651,25 @@ document.addEventListener('DOMContentLoaded', async function(){
       console.warn('[auth] Token check skipped (offline), proceeding optimistically');
     }
 
+    // Re-verify Onroute permission on session restore (in case access was revoked)
+    try {
+      const _profRows = await fetch(SB_URL + '/rest/v1/users?uid=eq.' + a.uid + '&select=Onroute&limit=1', {
+        headers: { 'apikey': SB_ANON, 'Authorization': 'Bearer ' + a.token }
+      });
+      if(_profRows.ok){
+        const _pd = await _profRows.json();
+        if((_pd[0]?.Onroute||'').trim().toLowerCase() !== 'approved'){
+          console.warn('[auth] OnRoute access revoked for', a.email);
+          try { localStorage.removeItem('onroute_auth'); } catch(e){}
+          const _errEl = document.getElementById('login-err');
+          if(_errEl){
+            _errEl.innerHTML = '<b>Access Not Permitted</b><br>Your account does not have permission to access the OnRoute portal.';
+            _errEl.classList.add('on');
+          }
+          return;
+        }
+      }
+    } catch(e) { /* network offline — proceed optimistically */ }
     AUTH = a;
     showApp();
   } catch(e) { console.log('Session restore failed:', e); }
@@ -4622,7 +4700,18 @@ window.addEventListener('online',()=>{_doTokenRefresh();setTimeout(()=>{if(MODUL
 // ANALYTICS DASHBOARD
 // ════════════════════════════════════════════════════════════════
 function renderAnalytics(){
-  return renderAnalyticsFull();
+  // Sub-nav anchors — scroll to section without re-rendering
+  const tabs = [
+    {id:'an-sec-overview', label:'📊 Overview'},
+    {id:'an-sec-type',     label:'🗂 By Type'},
+    {id:'an-sec-agent',    label:'👤 By Agent'},
+    {id:'an-sec-monthly',  label:'📅 Monthly'},
+    {id:'an-sec-pending',  label:'📈 Daily Pending'},
+  ];
+  const subnav = '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:18px;border-bottom:2px solid var(--border);padding-bottom:0;position:sticky;top:0;background:var(--bg);z-index:10">'
+    + tabs.map(t=>`<button onclick="document.getElementById('${t.id}')?.scrollIntoView({behavior:'smooth',block:'start'})" style="padding:8px 14px;border:none;background:none;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s;white-space:nowrap" onmouseover="this.style.color='var(--accent)';this.style.borderBottomColor='var(--accent)'" onmouseout="this.style.color='var(--muted)';this.style.borderBottomColor='transparent'">${t.label}</button>`).join('')
+    + '</div>';
+  return subnav + renderAnalyticsFull();
 }
 
 
@@ -4835,6 +4924,7 @@ function renderAnalyticsFull(){
       <button class="btn btn-outline btn-sm" onclick="loadAnalytics()">🔄 Refresh</button>
     </div>
 
+    <div id="an-sec-overview" style="scroll-margin-top:60px"></div>
     <!-- ── KPI Cards ── -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px;margin-bottom:18px">
       ${anKv('Total Activities',total.toLocaleString(),'All time','#6366F1')}
@@ -4909,6 +4999,7 @@ function renderAnalyticsFull(){
       )}
     </div>
 
+    <div id="an-sec-agent" style="scroll-margin-top:60px"></div>
     <!-- ── Team Performance ── -->
     ${SECTION('Team Performance',
       `<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px">
@@ -5032,9 +5123,11 @@ function renderAnalyticsFull(){
       })()}`
     )}
 
+    <div id="an-sec-pending" style="scroll-margin-top:60px"></div>
     <!-- ── Daily Pending Trend ── -->
     ${SECTION('📈 Daily Pending Activities',renderDailyPendingChart(data,'#6366F1'))}
 
+    <div id="an-sec-monthly" style="scroll-margin-top:60px"></div>
     <!-- ── Monthly Timeline ── -->
     ${SECTION('Monthly Volume',
       `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -6589,9 +6682,9 @@ function renderAuditDashboard(){
 
 <!-- Audit list table -->
 <div style="background:#fff;border:1px solid var(--border);border-radius:10px;overflow:hidden">
-<table style="width:100%;border-collapse:collapse;font-size:13px">
-<thead><tr style="background:var(--surface2);border-bottom:2px solid var(--border)">
-  ${['SITE ID','REGION','GRID','SITE TYPE','AUDITOR','DATE','STATUS','ACTIONS'].map(h=>`<th style="padding:8px 14px;text-align:left;font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;white-space:nowrap">${h}</th>`).join('')}
+<table id="aud-dash-table" class="data-table" style="width:100%;border-collapse:collapse;font-size:13px">
+<thead><tr>
+  ${['SITE ID','REGION','GRID','SITE TYPE','AUDITOR','DATE','STATUS',''].map(h=>`<th>${h}</th>`).join('')}
 </tr></thead>
 <tbody id="aud-dash-tbody">${(()=>{
   if(!filtered.length) return `<tr><td colspan="8" style="text-align:center;padding:28px;color:var(--muted)">No audits match your filters.</td></tr>`;
@@ -6603,7 +6696,7 @@ function renderAuditDashboard(){
     const isAppr=APPROVER_GRIDS.includes(a.grid_id);
     return `<tr style="border-bottom:1px solid var(--border)" onmouseover="this.style.background='#F5F8FF'" onmouseout="this.style.background=''">
       <td style="padding:9px 14px;font-family:var(--mono);font-weight:700">${escH(String(a.site_id||'—'))}</td>
-      <td style="padding:9px 14px;font-size:12px;color:var(--muted)">${escH(a.region||a.grid_id||'—')}</td>
+      <td style="padding:9px 14px;font-size:12px;color:var(--muted)">${escH(a.region||_sslRegionMap[String(a.site_id)]||_sslRegionMap[String(parseInt(a.site_id,10))]||'—')}</td>
       <td style="padding:9px 14px"><span style="font-size:11px;font-weight:700;padding:2px 6px;border-radius:5px;background:var(--bg2);color:var(--text2)">${escH(a.grid_id||'—')}</span></td>
       <td style="padding:9px 14px;font-size:12px">${escH(a.site_type||'—')}</td>
       <td style="padding:9px 14px">
@@ -6627,6 +6720,9 @@ function renderAuditDashboard(){
 // Targeted tbody-only re-render — keeps search input focused
 function renderAuditDashTable(){
   const tbody = document.getElementById('aud-dash-tbody');
+  // Build region map from SSL_CACHE for sites that don't store region
+  const _rm={}; (SSL_CACHE||[]).forEach(s=>{ if(s.region) _rm[s.siteId]=s.region; });
+  const _getRegion=a=>a.region||_rm[String(a.site_id)]||_rm[String(parseInt(a.site_id,10))]||'—';
   if(!tbody){ renderPage(); return; } // fallback if full render needed
   const q = (window._auditDashSearch||'').toLowerCase();
   const st = window._auditDashStatus||'';
@@ -6652,7 +6748,7 @@ function renderAuditDashTable(){
     const isAppr=APPROVER_GRIDS.includes(a.grid_id);
     return `<tr style="border-bottom:1px solid var(--border)" onmouseover="this.style.background='#F5F8FF'" onmouseout="this.style.background=''">
       <td style="padding:9px 14px;font-family:var(--mono);font-weight:700">${escH(String(a.site_id||'—'))}</td>
-      <td style="padding:9px 14px;font-size:12px;color:var(--muted)">${escH(a.region||a.grid_id||'—')}</td>
+      <td style="padding:9px 14px;font-size:12px;color:var(--muted)">${escH(_getRegion(a))}</td>
       <td style="padding:9px 14px"><span style="font-size:11px;font-weight:700;padding:2px 6px;border-radius:5px;background:var(--bg2);color:var(--text2)">${escH(a.grid_id||'—')}</span></td>
       <td style="padding:9px 14px;font-size:12px">${escH(a.site_type||'—')}</td>
       <td style="padding:9px 14px"><div style="font-size:12px;font-weight:600">${escH(a.submitted_by_name||'—')}</div><div style="font-size:10px;color:var(--muted)">${escH(a.company||'')}</div></td>
@@ -6664,6 +6760,8 @@ function renderAuditDashTable(){
       </td>
     </tr>`;
   }).join('');
+  // Re-attach sort/filter since tbody was replaced
+  setTimeout(()=>{ if(window._makeSortable){const t=document.getElementById('aud-dash-table');if(t){delete t.dataset.sortable;window._makeSortable(t);}} }, 0);
 }
 
 function openAuditDashDetail(i){
@@ -6723,6 +6821,166 @@ function audFilterTechInModal(cb, tech, sectors){
   if(window._audDrawTower) window._audDrawTower();
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// UNIVERSAL EXCEL-STYLE SORTABLE + FILTERABLE TABLE ENGINE
+// Automatically attaches to every .data-table on render
+// ════════════════════════════════════════════════════════════════
+(function(){
+  const _state = new WeakMap(); // per-table sort+filter state
+
+  function cellText(td){
+    // Get clean text — strip badges/buttons for comparison
+    return (td.getAttribute('data-sort') || td.innerText || td.textContent || '').trim();
+  }
+
+  function parseVal(str){
+    // Try numeric (including dates like 2026-06-08)
+    if(!str || str === '—' || str === '-') return -Infinity;
+    const n = Number(str.replace(/[,m%]/gi,''));
+    if(!isNaN(n)) return n;
+    // Date
+    const d = Date.parse(str);
+    if(!isNaN(d)) return d;
+    return str.toLowerCase();
+  }
+
+  function applySort(table, col, dir){
+    const tbody = table.tBodies[0]; if(!tbody) return;
+    const rows = [...tbody.querySelectorAll('tr:not(.tbl-filter-row)')];
+    rows.sort((a,b)=>{
+      const av = parseVal(cellText(a.cells[col]));
+      const bv = parseVal(cellText(b.cells[col]));
+      if(av === bv) return 0;
+      if(typeof av === 'string' && typeof bv === 'string')
+        return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+      return dir === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+  }
+
+  function applyFilters(table, filters){
+    const tbody = table.tBodies[0]; if(!tbody) return;
+    tbody.querySelectorAll('tr:not(.tbl-filter-row)').forEach(row=>{
+      let show = true;
+      filters.forEach((f, ci)=>{
+        if(!f) return;
+        const cell = row.cells[ci];
+        if(!cell) return;
+        const txt = cellText(cell).toLowerCase();
+        if(!txt.includes(f.toLowerCase())) show = false;
+      });
+      row.style.display = show ? '' : 'none';
+    });
+  }
+
+  function highlightMatches(table, filters){
+    const tbody = table.tBodies[0]; if(!tbody) return;
+    // Remove old highlights
+    tbody.querySelectorAll('.tbl-match-hl').forEach(el=>{
+      el.outerHTML = el.innerHTML;
+    });
+    filters.forEach((f,ci)=>{
+      if(!f) return;
+      tbody.querySelectorAll('tr:not(.tbl-filter-row)').forEach(row=>{
+        const cell = row.cells[ci]; if(!cell || row.style.display==='none') return;
+        const txt = cell.innerText||cell.textContent||'';
+        const re = new RegExp('('+f.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')', 'gi');
+        // Only highlight text nodes to avoid breaking buttons/badges
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+        const textNodes = [];
+        let node;
+        while((node = walker.nextNode())) textNodes.push(node);
+        textNodes.forEach(tn=>{
+          if(!tn.nodeValue.trim()) return;
+          const span = document.createElement('span');
+          span.innerHTML = tn.nodeValue.replace(re, '<mark class="tbl-match-hl">$1</mark>');
+          tn.parentNode.replaceChild(span, tn);
+        });
+      });
+    });
+  }
+
+  function attachToTable(table){
+    if(table.dataset.sortable === '1') return; // already attached
+    table.dataset.sortable = '1';
+
+    const thead = table.tHead; if(!thead) return;
+    const headerRow = thead.rows[0]; if(!headerRow) return;
+    const nCols = headerRow.cells.length;
+
+    const st = { sortCol:-1, sortDir:'asc', filters: Array(nCols).fill('') };
+    _state.set(table, st);
+
+    // Mark sortable headers
+    [...headerRow.cells].forEach((th, ci)=>{
+      // Skip action columns (last col, or cols with no text)
+      const label = th.textContent.trim();
+      if(!label) return;
+      th.classList.add('sortable');
+      th.addEventListener('click', ()=>{
+        if(st.sortCol === ci){
+          st.sortDir = st.sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          st.sortCol = ci; st.sortDir = 'asc';
+        }
+        [...headerRow.cells].forEach((h,i)=>{
+          h.classList.remove('sort-asc','sort-desc');
+          if(i === st.sortCol) h.classList.add('sort-'+st.sortDir);
+        });
+        applySort(table, st.sortCol, st.sortDir);
+      });
+    });
+
+    // Add filter row below headers
+    const filterRow = thead.insertRow();
+    filterRow.classList.add('tbl-filter-row');
+    [...headerRow.cells].forEach((th, ci)=>{
+      const fth = filterRow.insertCell();
+      const label = th.textContent.trim();
+      if(!label){ return; } // empty = action col, no filter
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'tbl-filter-inp';
+      inp.placeholder = '🔍 Filter…';
+      inp.title = 'Filter ' + label;
+      inp.addEventListener('input', ()=>{
+        st.filters[ci] = inp.value;
+        applyFilters(table, st.filters);
+        // Debounce highlight
+        clearTimeout(table._hlTimer);
+        table._hlTimer = setTimeout(()=> highlightMatches(table, st.filters), 300);
+      });
+      inp.addEventListener('keydown', e=>{ if(e.key==='Escape'){inp.value='';st.filters[ci]='';applyFilters(table,st.filters);} });
+      fth.appendChild(inp);
+    });
+  }
+
+  // Observer: attach to every .data-table that enters the DOM
+  const observer = new MutationObserver(muts=>{
+    muts.forEach(m=>{
+      m.addedNodes.forEach(node=>{
+        if(node.nodeType !== 1) return;
+        // Direct match
+        if(node.classList && node.classList.contains('data-table')) attachToTable(node);
+        // Children
+        node.querySelectorAll && node.querySelectorAll('table.data-table').forEach(attachToTable);
+      });
+    });
+  });
+
+  // Also attach to any tables already in DOM when this runs
+  function attachAll(){ document.querySelectorAll('table.data-table').forEach(attachToTable); }
+
+  document.addEventListener('DOMContentLoaded', ()=>{
+    attachAll();
+    observer.observe(document.body, {childList:true, subtree:true});
+  });
+
+  // Expose for manual call if needed
+  window._makeSortable = attachToTable;
+  window._attachAllSortable = attachAll;
+})();
 </script>
 
 <!-- ═══ ATTENDANCE FULL PAGE ═══════════════════════════════════════════ -->
